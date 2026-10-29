@@ -1,7 +1,7 @@
 """Shared fine-tuning machinery for the pretrained lens-finder pipelines.
 
 Mirrors train.py so results are directly comparable with LensNet:
-- same data sources/patterns, same stratified 70/20/10 split with the same seed
+- same data sources and stratified 70/20/10 split (datasets/sources.py), including mock-only runs
 - LensDatasetMemoryEfficient (inpainting + outlier clipping) as the base dataset
 - class-weighted cross-entropy with label smoothing, AdamW, AMP, gradient clipping
 - model selection on validation F2 subject to a minimum specificity, early stopping
@@ -31,12 +31,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import average_precision_score, fbeta_score, roc_auc_score
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.base import LensDatasetMemoryEfficient  # noqa: E402
+from datasets.sources import add_data_arguments, collect_from_args, split_files  # noqa: E402
 from datasets.transforms import TransformedDataset  # noqa: E402
 
 
@@ -45,11 +45,7 @@ from datasets.transforms import TransformedDataset  # noqa: E402
 # --------------------------------------------------------------------------------------
 def build_arg_parser(description):
     p = argparse.ArgumentParser(description=description, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    d = p.add_argument_group("data (same sources and split as train.py)")
-    d.add_argument("--mock_data_dir", required=True, help="Directory with cosmos_lens_*.npy / cosmos_nonlens_*.npy")
-    d.add_argument("--real_lens_dir", help="Directory for real lens data")
-    d.add_argument("--real_nonlens_dir", help="Directory for real non-lens data")
-    d.add_argument("--max_samples_per_class", type=int, help="Max samples per source for balancing")
+    d = add_data_arguments(p.add_argument_group("data (same sources and split as train.py)"))
     d.add_argument("--output_dir", required=True, help="Output directory for checkpoints and results")
     d.add_argument("--bands", help="Comma-separated base-data channel indices fed to the model's input slots")
     d.add_argument("--resize_mode", choices=["resize", "center_crop"], default="resize",
@@ -114,46 +110,6 @@ def setup_logging(output_dir, name):
 # --------------------------------------------------------------------------------------
 # Data
 # --------------------------------------------------------------------------------------
-def collect_files(args, logger):
-    """Same sources and glob patterns as train.py."""
-    sources = [
-        (args.mock_data_dir, 1, "cosmos_lens_*.npy", "mock_lens"),
-        (args.mock_data_dir, 0, "cosmos_nonlens_*.npy", "mock_nonlens"),
-        (args.real_lens_dir, 1, "**/*.npy", "real_lens"),
-        (args.real_nonlens_dir, 0, "**/*.npy", "real_nonlens"),
-    ]
-    paths, labels, origins = [], [], []
-    for data_dir, label, pattern, source_name in sources:
-        if not data_dir or not Path(data_dir).exists():
-            continue
-        data_dir = Path(data_dir)
-        search_dir = data_dir / "npy" if (data_dir / "npy").exists() else data_dir
-        files = list(search_dir.glob(pattern))
-        if args.max_samples_per_class and len(files) > args.max_samples_per_class:
-            files = np.random.choice(files, args.max_samples_per_class, replace=False).tolist()
-        paths.extend(str(f) for f in files)
-        labels.extend([label] * len(files))
-        origins.extend([source_name] * len(files))
-        logger.info(f"  {source_name}: {len(files)} samples")
-    if not paths:
-        raise ValueError("No data files found!")
-    logger.info(f"Total: {len(paths)} files, lenses: {sum(labels)}, non-lenses: {len(labels) - sum(labels)}")
-    return paths, labels, origins
-
-
-def split_files(paths, labels, origins, seed, logger):
-    """Stratified 70/20/10 split, identical to train.py."""
-    tr_p, tmp_p, tr_y, tmp_y, tr_s, tmp_s = train_test_split(
-        paths, labels, origins, test_size=0.3, random_state=seed, stratify=labels)
-    va_p, te_p, va_y, te_y, va_s, te_s = train_test_split(
-        tmp_p, tmp_y, tmp_s, test_size=0.333, random_state=seed, stratify=tmp_y)
-    splits = {"train": (tr_p, tr_y, tr_s), "val": (va_p, va_y, va_s), "test": (te_p, te_y, te_s)}
-    for name, (p, y, _) in splits.items():
-        logger.info(f"  {name:5s}: {len(p)} samples - lens: {sum(y)}, non-lens: {len(y) - sum(y)}")
-    assert not (set(tr_p) & set(va_p) or set(tr_p) & set(te_p) or set(va_p) & set(te_p)), "Data leak between splits"
-    return splits
-
-
 def make_loader(paths, labels, transform, args, shuffle):
     base = LensDatasetMemoryEfficient(paths, labels, track_statistics=False)
     kwargs = dict(batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=torch.cuda.is_available(),
@@ -351,8 +307,8 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
                    "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
                    **(extra_info or {})}, f, indent=2, default=str)
 
-    logger.info("Collecting files...")
-    paths, labels, origins = collect_files(args, logger)
+    logger.info(f"Collecting files (data_mode={args.data_mode})...")
+    paths, labels, origins = collect_from_args(args, logger)
     splits = split_files(paths, labels, origins, args.seed, logger)
     train_loader = make_loader(*splits["train"][:2], train_transform, args, shuffle=True)
     val_loader = make_loader(*splits["val"][:2], eval_transform, args, shuffle=False)

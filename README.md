@@ -1,5 +1,27 @@
 # LensDetection
 
+## Data and training from scratch
+
+`train.py` trains LensNet from scratch, and `pipelines/` fine-tunes pretrained models. Both read the same
+data sources through `datasets/sources.py` and use the same stratified 70/20/10 split:
+
+| Source | Location | Label |
+|---|---|---|
+| `mock_lens` / `mock_nonlens` | `--mock_data_dir` (`cosmos_lens_*.npy`, `cosmos_nonlens_*.npy`) | 1 / 0 |
+| `real_lens` / `real_nonlens` | `--real_lens_dir` / `--real_nonlens_dir` (`**/*.npy`), optional | 1 / 0 |
+
+`--data_mode` chooses the sources:
+
+- `mock`: simulated data only. Any real directories that are passed are ignored.
+- `mock+real`: simulated and real data. The run fails if a real directory is missing or empty.
+- `auto` (default): simulated data, plus each real directory that is given and exists. A missing real
+  directory is skipped with a warning.
+
+```bash
+python train.py --mock_data_dir /path/to/mock --output_dir results/lensnet_mock --data_mode mock --gpu
+DATA_MODE=mock sbatch slurm/finetune.sh        # fine-tuning on simulated data only
+```
+
 ## Fine-tuning pretrained lens finders
 
 Three pipelines fine-tune published lens-detection models on the base dataset
@@ -29,7 +51,7 @@ sbatch slurm/finetune.sh deeplens
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
-arguments (`--mock_data_dir`, `--real_lens_dir`, `--real_nonlens_dir`, `--max_samples_per_class`), plus:
+arguments (`--mock_data_dir`, `--real_lens_dir`, `--real_nonlens_dir`, `--data_mode`, `--max_samples_per_class`), plus:
 
 - `--bands`: which base-data channels feed the model's input slots. The defaults assume the four base
   channels are ordered blue to red. GraViT uses `3,2,1` (RGB); TEGLIE and DeepLens use `2,3,1,0`, the analogue

@@ -42,12 +42,15 @@ Quality Assurance:
 - Enables reproducibility and validation of data preprocessing
 
 Usage on Mahti:
-python cosmos_lens_detection_ml_pipeline_mahti_advanced.py \
+python train.py \
   --mock_data_dir /scratch/project_2001659/production_dataset_20k_final \
   --real_lens_dir /scratch/project_2001659/real_cowls_lenses \
   --real_nonlens_dir /scratch/project_2001659/real_nonlens_jwst \
   --output_dir /scratch/project_2001659/ml_training_results_advanced \
   --gpu --multi_gpu
+
+Simulated (mock) data only:
+python train.py --mock_data_dir ... --output_dir ... --data_mode mock
 
 References:
 - Inpainting approach inspired by Bertalmio et al. (2000) "Image Inpainting"
@@ -90,8 +93,9 @@ import random
 
 
 # internal imports
-from datasets.mock_data import RESTDataset
-from models.lesnet import LensNet
+from datasets.base import LensDatasetMemoryEfficient
+from datasets.sources import add_data_arguments, collect_from_args, split_files
+from models.lensnet import LensNet
 # --------------------------------------------------------------------------------------
 # Reproducibility
 # --------------------------------------------------------------------------------------
@@ -257,7 +261,7 @@ def generate_gradcam_visualizations(model, test_loader, device, output_dir, num_
             confidence = F.softmax(output, dim=1)[0, pred_label].item()
         
         # Generate Grad-CAM (need gradients, so no torch.no_grad)
-        img_tensor_grad = sample['image'].to(device).requires_grad_(True)
+        img_tensor_grad = sample['image'].to(device).clone().requires_grad_(True)  # clone: .to() is a no-op on CPU
         cam = gradcam.generate_cam(img_tensor_grad, target_class=1)  # Attention for "lens" class
         
         # Get original image
@@ -463,11 +467,7 @@ def validate_epoch(model, val_loader, criterion, device):
 # --------------------------------------------------------------------------------------
 def parse_arguments():
     parser = argparse.ArgumentParser(description="COSMOS-Web Lens Detection ML Pipeline - Advanced Version")
-    parser.add_argument("--mock_data_dir", required=True, help="Directory for mock data")
-    parser.add_argument("--catalog_csv", default="./cosmos_lens_training_catalog.csv",
-                        help="Path to catalog CSV for source_redshift lookup (lens + nonlens)")
-    parser.add_argument("--real_lens_dir", help="Directory for real lens data")
-    parser.add_argument("--real_nonlens_dir", help="Directory for real non-lens data")
+    add_data_arguments(parser)
     parser.add_argument("--output_dir", required=True, help="Output directory for results")
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size (increased from 32 to 64 for faster training - adjust based on GPU memory)")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
@@ -483,7 +483,6 @@ def parse_arguments():
     parser.add_argument("--prefetch_factor", type=int, default=4, help="Number of batches prefetched by each worker (higher = more parallel loading, uses more RAM)")
     parser.add_argument("--persistent_workers", action="store_true", default=True, help="Keep data loading workers alive between epochs (faster than recreating)")
     parser.add_argument('--no-persistent_workers', dest='persistent_workers', action='store_false', help='Disable persistent workers')
-    parser.add_argument("--max_samples_per_class", type=int, help="Max samples per class for balancing")
     parser.add_argument('--mixed_precision', action='store_true', default=True, help='Enable mixed precision training')
     parser.add_argument('--no-mixed_precision', dest='mixed_precision', action='store_false', help='Disable mixed precision training')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
@@ -503,50 +502,6 @@ def parse_arguments():
     
     return parser.parse_args()
     
-
-def create_files(sources, max_samples_per_class, logger):
-    """Collect files from multiple data sources.
-    
-    Args:
-        sources: List of tuples (data_dir, label, pattern, source_name)
-        max_samples_per_class: Maximum samples to collect per class (None for all)
-        logger: Logger instance
-        
-    Returns:
-        Tuple of (labels, paths, sources) lists
-    """
-    all_paths = []
-    all_labels = []
-    all_sources = []  # Track data source (mock/real)
-    
-    for data_dir, label, pattern, source_name in sources:
-        if data_dir:
-            data_dir = Path(data_dir)
-            if data_dir.exists():
-                search_dir = data_dir / "npy" if (data_dir / "npy").exists() else data_dir
-                files = list(search_dir.glob(pattern))
-                if max_samples_per_class and len(files) > max_samples_per_class:
-                    files = np.random.choice(files, max_samples_per_class, replace=False).tolist()
-                all_paths.extend([str(f) for f in files])
-                all_labels.extend([label] * len(files))
-                all_sources.extend([source_name] * len(files))
-                logger.info(f"  {source_name}: {len(files)} samples")
-
-    if not all_paths:
-        raise ValueError("No data files found!")
-    
-    logger.info(f"Total files found: {len(all_paths)}, Lenses: {sum(all_labels)}, Non-lenses: {len(all_labels) - sum(all_labels)}")
-    
-    # --- Skip pre-filtering: runtime inpainting handles corrupted files ---
-    # Pre-filtering is now disabled because:
-    # 1. Runtime inpainting intelligently repairs <50% corrupted files
-    # 2. Files with >50% corruption are rejected during loading
-    # 3. This saves significant preprocessing time on large datasets
-    logger.info("Pre-filtering disabled - corrupted files will be handled at runtime via inpainting")
-    
-    return all_labels, all_paths, all_sources
-
-
 
 def main():
     args = parse_arguments()
@@ -575,23 +530,10 @@ def main():
     device = torch.device("cuda" if args.gpu and torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # --- Data Collection: Combine all sources first, then split properly ---
-    logger.info("Collecting file paths from all sources...")
-    
-    # Collect all data sources in one go
-    all_sources = [
-        (args.mock_data_dir, 1, "cosmos_lens_*.npy", "mock_lens"),
-        (args.mock_data_dir, 0, "cosmos_nonlens_*.npy", "mock_nonlens"),
-        (args.real_lens_dir, 1, "**/*.npy", "real_lens"),
-        (args.real_nonlens_dir, 0, "**/*.npy", "real_nonlens"),
-    ]
-    
-    all_labels, all_paths, all_data_sources = create_files(all_sources, args.max_samples_per_class, logger)
-    
-    if not all_paths:
-        raise ValueError("No data files found!")
-    
-    logger.info(f"Total files collected: {len(all_paths)}, Lenses: {sum(all_labels)}, Non-lenses: {len(all_labels) - sum(all_labels)}")
+    # --- Data Collection: mock data, plus real data depending on --data_mode ---
+    logger.info(f"Collecting file paths (data_mode={args.data_mode})...")
+    all_paths, all_labels, all_data_sources = collect_from_args(args, logger)
+    logger.info("Pre-filtering disabled - corrupted files will be handled at runtime via inpainting")
     
     # --- Calculate and report class imbalance ---
     lens_count = sum(all_labels)
@@ -606,44 +548,20 @@ def main():
         logger.warning(f"⚠ SEVERE CLASS IMBALANCE ({imbalance_ratio:.1f}:1) - May cause degenerate models!")
         logger.warning("  Consider: (1) Collect more lens data, (2) Use lower lens_weight_multiplier (1.0-1.1)")
     
-    # --- Proper 70-20-10 Train/Val/Test Split on ALL data ---
-    # First split: 70% train, 30% temp
-    train_paths, temp_paths, train_labels, temp_labels, train_sources, temp_sources = train_test_split(
-        all_paths, all_labels, all_data_sources, test_size=0.3, random_state=args.seed, stratify=all_labels
-    )
-    
-    # Second split: 20% val, 10% test (from the 30% temp)
-    val_paths, test_paths, val_labels, test_labels, val_sources, test_sources = train_test_split(
-        temp_paths, temp_labels, temp_sources, test_size=0.333, random_state=args.seed, stratify=temp_labels  # 0.333 of 30% ≈ 10%
-    )
-    
-    logger.info(f"Data split:")
-    logger.info(f"  Train: {len(train_paths)} samples ({100*len(train_paths)/len(all_paths):.1f}%) - Lens: {sum(train_labels)}, Non-lens: {len(train_labels)-sum(train_labels)}")
-    logger.info(f"  Val:   {len(val_paths)} samples ({100*len(val_paths)/len(all_paths):.1f}%) - Lens: {sum(val_labels)}, Non-lens: {len(val_labels)-sum(val_labels)}")
-    logger.info(f"  Test:  {len(test_paths)} samples ({100*len(test_paths)/len(all_paths):.1f}%) - Lens: {sum(test_labels)}, Non-lens: {len(test_labels)-sum(test_labels)}")
-    
-    # --- Data Leak Prevention Check ---
-    train_set = set(train_paths)
-    val_set = set(val_paths)
-    test_set = set(test_paths)
-    
-    train_val_overlap = train_set & val_set
-    train_test_overlap = train_set & test_set
-    val_test_overlap = val_set & test_set
-    
-    if train_val_overlap or train_test_overlap or val_test_overlap:
-        logger.error(f"DATA LEAK DETECTED! Train/Val overlap: {len(train_val_overlap)}, "
-                    f"Train/Test overlap: {len(train_test_overlap)}, "
-                    f"Val/Test overlap: {len(val_test_overlap)}")
-        raise ValueError("Data leak detected between splits!")
+    # --- Stratified 70-20-10 Train/Val/Test split (includes the data leak check) ---
+    logger.info("Data split:")
+    splits = split_files(all_paths, all_labels, all_data_sources, args.seed, logger)
+    train_paths, train_labels, train_sources = splits["train"]
+    val_paths, val_labels, val_sources = splits["val"]
+    test_paths, test_labels, test_sources = splits["test"]
     logger.info("✓ Data leak check passed - no overlap between splits")
     
-    # --- Datasets: RESTDataset uses create_files paths + catalog lookup for source_redshift channel selection ---
-    logger.info("Creating RESTDataset (single-channel from catalog source_redshift)...")
-    train_dataset = RESTDataset(train_paths, train_labels, csv_path=args.catalog_csv, track_statistics=False)
-    val_dataset = RESTDataset(val_paths, val_labels, csv_path=args.catalog_csv, track_statistics=False)
-    test_dataset = RESTDataset(test_paths, test_labels, csv_path=args.catalog_csv, track_statistics=False)
-    logger.info("⚡ RESTDataset: channel per sample from catalog; statistics tracking disabled for training")
+    # --- Datasets: base dataset (4 bands, inpainting + outlier clipping, no normalization) ---
+    logger.info("Creating LensDatasetMemoryEfficient datasets (4 x 300 x 300)...")
+    train_dataset = LensDatasetMemoryEfficient(train_paths, train_labels, track_statistics=False)
+    val_dataset = LensDatasetMemoryEfficient(val_paths, val_labels, track_statistics=False)
+    test_dataset = LensDatasetMemoryEfficient(test_paths, test_labels, track_statistics=False)
+    logger.info("⚡ Statistics tracking disabled for training")
     
     # Log dataset statistics for reproducibility
     logger.info(f"Train dataset: {len(train_dataset)} samples (Lens: {sum(train_labels)}, Non-lens: {len(train_labels)-sum(train_labels)})")
@@ -666,8 +584,8 @@ def main():
     val_loader = DataLoader(val_dataset, shuffle=False, **dataloader_kwargs)
     test_loader = DataLoader(test_dataset, shuffle=False, **dataloader_kwargs)
 
-    # RESTDataset returns [1, 300, 300] single-channel
-    model = LensNet(dropout=args.dropout, in_channels=1).to(device)
+    # LensDatasetMemoryEfficient returns [4, 300, 300]
+    model = LensNet(dropout=args.dropout, in_channels=4).to(device)
     if args.multi_gpu and torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
         logger.info(f"Using {torch.cuda.device_count()} GPUs")
@@ -1060,11 +978,10 @@ def main():
     logger.info("="*80)
     
     # Collect statistics by sampling dataset with single-process loading
-    catalog_csv = args.catalog_csv
     for split_name, paths, labels_sub in [("Training", train_paths[:1000], train_labels[:1000]),
                                           ("Validation", val_paths[:500], val_labels[:500]),
                                           ("Test", test_paths[:500], test_labels[:500])]:
-        temp_dataset = RESTDataset(paths, labels_sub, csv_path=catalog_csv, track_statistics=True)
+        temp_dataset = LensDatasetMemoryEfficient(paths, labels_sub, track_statistics=True)
         
         # Process samples to collect statistics (single-threaded)
         for i in range(len(temp_dataset)):
