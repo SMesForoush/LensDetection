@@ -1,7 +1,7 @@
 """Shared fine-tuning machinery for the pretrained lens-finder pipelines.
 
 Mirrors train.py so results are directly comparable with LensNet:
-- same data sources and stratified 70/20/10 split (datasets/sources.py), including mock-only runs
+- same data sources and split (datasets/sources.py): real images by sky region, optional PRISM data 70/20/10
 - LensDatasetMemoryEfficient (inpainting + outlier clipping) as the base dataset
 - class-weighted cross-entropy with label smoothing, AdamW, AMP, gradient clipping
 - model selection on validation F2 subject to a minimum specificity, early stopping
@@ -36,7 +36,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.base import LensDatasetMemoryEfficient  # noqa: E402
-from datasets.sources import add_data_arguments, collect_from_args, split_files  # noqa: E402
+from datasets.sources import add_data_arguments, collect_from_args, split_samples  # noqa: E402
 from datasets.transforms import TransformedDataset  # noqa: E402
 
 
@@ -307,9 +307,9 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
                    "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
                    **(extra_info or {})}, f, indent=2, default=str)
 
-    logger.info(f"Collecting files (data_mode={args.data_mode})...")
-    paths, labels, origins = collect_from_args(args, logger)
-    splits = split_files(paths, labels, origins, args.seed, logger)
+    logger.info(f"Collecting files (include_prism={args.include_prism})...")
+    samples = collect_from_args(args, logger)
+    splits = split_samples(samples, args.val_region, args.test_region, args.seed, logger)
     train_loader = make_loader(*splits["train"][:2], train_transform, args, shuffle=True)
     val_loader = make_loader(*splits["val"][:2], eval_transform, args, shuffle=False)
     test_loader = make_loader(*splits["test"][:2], eval_transform, args, shuffle=False)

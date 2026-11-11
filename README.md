@@ -3,30 +3,63 @@
 ## Data and training from scratch
 
 `train.py` trains LensNet from scratch, and `pipelines/` fine-tunes pretrained models. Both read the same
-data sources through `datasets/sources.py` and use the same stratified 70/20/10 split:
+data sources through `datasets/sources.py` and use the same split.
 
-| Source | Location | Label |
+**Real COSMOS-Web DR1 images (the default).** `datasets/cosmos_real_manifest.csv` lists them, with their sky region:
+
+| Source | Images | Label |
 |---|---|---|
-| `mock_lens` / `mock_nonlens` | `--mock_data_dir` (`cosmos_lens_*.npy`, `cosmos_nonlens_*.npy`) | 1 / 0 |
-| `real_lens` / `real_nonlens` | `--real_lens_dir` / `--real_nonlens_dir` (`**/*.npy`), optional | 1 / 0 |
+| `real_lens_confident` | COWLS M25 + S07-S12 lenses: 78 | 1 |
+| `real_lens_calibration` | COWLS S03-S06 lenses: 199 | 1 |
+| `lookalike` | look-alikes (galaxies that resemble the COWLS lenses): 2,608 | 0 |
+| `real_nonlens` | hand-checked non-lenses: 2,146 | 0 |
 
-`--data_mode` chooses the sources:
+The files are read from `--cosmos_root` (default `/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling`, the
+manifest's `file` paths are relative to it). `--real_lens_dir`, `--lookalike_dir` and `--real_nonlens_dir` read a
+source from another folder instead, by file name.
 
-- `mock`: simulated data only. Any real directories that are passed are ignored.
-- `mock+real`: simulated and real data. The run fails if a real directory is missing or empty.
-- `auto` (default): simulated data, plus each real directory that is given and exists. A missing real
-  directory is skipped with a warning.
+The manifest is built by `scripts/build_real_manifest.py` from the mock-lens-modeling sample lists
+(`samples/lookalikes/cache/index.csv`, `samples/benchmark_v1/regions_v2/tile_fold_table.csv`,
+`samples/labels_v2/external_candidates_anomalymatch.csv`). It leaves out the weak COWLS candidates (S00-S02),
+the three lens cutouts trimmed at a tile edge (COSJ100024+021749, COSJ095953+022159, COSJ100101+021819) and the
+four AnomalyMatch lens candidates that were among the non-lenses (104781, 628424, 87284, 82656).
+
+**Split by sky region.** DR1 is divided into 5 sky regions. Region `--test_region` (default 0) is the test set,
+`--val_region` (default 4) the validation set, and the other three regions are training data. Training-region
+images within 13" of the validation or test region are dropped, so no training cutout shares pixels with a
+validation or test cutout.
+
+**PRISM simulations (optional).** `--include_prism --prism_dir DIR` adds `cosmos_lens_*.npy` (`prism_lens`, label 1)
+and `cosmos_nonlens_*.npy` (`prism_nonlens`, label 0). They have no sky position and are split 70/20/10 at random
+(stratified), so validation and test then hold both real and PRISM images. `--mock_data_dir` is accepted as
+another name for `--prism_dir`.
 
 ```bash
-python train.py --mock_data_dir /path/to/mock --output_dir results/lensnet_mock --data_mode mock --gpu
-DATA_MODE=mock sbatch slurm/finetune.sh        # fine-tuning on simulated data only
+python train.py --output_dir results/lensnet_real --gpu
+python train.py --include_prism --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
+    --output_dir results/lensnet_real_prism --gpu
+INCLUDE_PRISM=1 sbatch slurm/finetune.sh       # fine-tuning on real + PRISM data
+```
+
+**Running off Roihu.** `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
+only). By default it packs the non-lenses, about 6.9 GB uncompressed. `--with_lenses` also packs the lens cutouts,
+`--prism_dir` the PRISM files and `--weights_dir` the pretrained weights. The script checks that every file
+exists and that the zip will fit before it writes anything.
+
+```bash
+# on Roihu, from the repository
+python3 scripts/pack_for_laptop.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
+    --weights_dir weights --out /scratch/$USER/cosmos_laptop_data.zip
+# on the laptop
+rsync -P roihu:/scratch/$USER/cosmos_laptop_data.zip . && unzip cosmos_laptop_data.zip -d cosmos_data
+python train.py --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses --output_dir results/local
 ```
 
 ## Fine-tuning pretrained lens finders
 
 Three pipelines fine-tune published lens-detection models on the base dataset
 (`datasets/base.py::LensDatasetMemoryEfficient`, 4 x 300 x 300 cutouts). They use the same file sources,
-seed and stratified 70/20/10 split as `train.py`, so test results are directly comparable with LensNet.
+seed and split as `train.py`, so test results are directly comparable with LensNet.
 
 | Pipeline | Model | Pretrained weights | Model input |
 |---|---|---|---|
@@ -51,7 +84,8 @@ sbatch slurm/finetune.sh deeplens
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
-arguments (`--mock_data_dir`, `--real_lens_dir`, `--real_nonlens_dir`, `--data_mode`, `--max_samples_per_class`), plus:
+arguments (`--cosmos_root`, `--val_region`, `--test_region`, `--include_prism`, `--prism_dir`,
+`--max_samples_per_class`, ...), plus:
 
 - `--bands`: which base-data channels feed the model's input slots. The defaults assume the four base
   channels are ordered blue to red. GraViT uses `3,2,1` (RGB); TEGLIE and DeepLens use `2,3,1,0`, the analogue
