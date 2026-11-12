@@ -2,7 +2,7 @@
 """Fine-tune LEXACTUM's CMU DeepLens (Magro et al. 2021; architecture from Lanusse et al. 2018).
 
     python -m pipelines.deeplens --weights weights/lexactum/ground_cmu_deeplens_250epochs.h5 \
-        --mock_data_dir ... --real_lens_dir ... --real_nonlens_dir ... --output_dir ... --gpu
+        --output_dir ... --gpu [--include_prism --prism_dir ...]
 
 Weights: https://doi.org/10.5281/zenodo.4299924 (see scripts/download_weights.sh).
     ground_cmu_deeplens_<N>epochs.h5   4 bands (R, I, G, U), Lens Finding Challenge ground-based set

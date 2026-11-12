@@ -2,7 +2,7 @@
 """Fine-tune a GraViT model (Parlange et al. 2025) on the base COSMOS-Web dataset.
 
     python -m pipelines.gravit --repo_id parlange/vit-gravit-c3 --finetune all \
-        --mock_data_dir ... --real_lens_dir ... --real_nonlens_dir ... --output_dir ... --gpu
+        --output_dir ... --gpu [--include_prism --prism_dir ...]
 
 GraViT models were trained on 3-band HSC gri cutouts at 224x224 with ImageNet normalisation, so the 4-band
 300x300 base images are reduced to 3 bands (--bands, model RGB order), resized to 224 and stretched to [0, 1].

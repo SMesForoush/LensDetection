@@ -6,7 +6,7 @@ Key Features:
 - Dynamic data loading: memory-efficient on-demand loading
 - No augmentation: preserves original astronomical data integrity
 - No normalization: uses raw pixel values for training
-- 70-20-10 split: train/validation/test with stratification
+- Real-data split by sky region: train/validation/test regions (datasets/sources.py); optional PRISM data 70-20-10
 - Recall-focused: optimized for maximizing lens detection (high recall)
 - Comprehensive metrics: recall, precision, F1, F2, specificity, NPV
 - Early stopping: based on validation F2-score with min specificity constraint to prevent overfitting
@@ -41,16 +41,12 @@ Quality Assurance:
 - Includes: corruption percentages, inpainting counts, rejection reasons
 - Enables reproducibility and validation of data preprocessing
 
-Usage on Mahti:
-python train.py \
-  --mock_data_dir /scratch/project_2001659/production_dataset_20k_final \
-  --real_lens_dir /scratch/project_2001659/real_cowls_lenses \
-  --real_nonlens_dir /scratch/project_2001659/real_nonlens_jwst \
-  --output_dir /scratch/project_2001659/ml_training_results_advanced \
-  --gpu --multi_gpu
+Usage on Roihu (real COWLS lenses, look-alikes and hand-checked non-lenses; see datasets/sources.py):
+python train.py --output_dir /scratch/ituomine/COSMOS-WEB-LENS/LensDetection/lensnet_real --gpu
 
-Simulated (mock) data only:
-python train.py --mock_data_dir ... --output_dir ... --data_mode mock
+Real data plus the PRISM simulations:
+python train.py --include_prism --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
+  --output_dir ... --gpu
 
 References:
 - Inpainting approach inspired by Bertalmio et al. (2000) "Image Inpainting"
@@ -94,7 +90,7 @@ import random
 
 # internal imports
 from datasets.base import LensDatasetMemoryEfficient
-from datasets.sources import add_data_arguments, collect_from_args, split_files
+from datasets.sources import add_data_arguments, collect_from_args, split_samples
 from models.lensnet import LensNet
 # --------------------------------------------------------------------------------------
 # Reproducibility
@@ -530,9 +526,10 @@ def main():
     device = torch.device("cuda" if args.gpu and torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # --- Data Collection: mock data, plus real data depending on --data_mode ---
-    logger.info(f"Collecting file paths (data_mode={args.data_mode})...")
-    all_paths, all_labels, all_data_sources = collect_from_args(args, logger)
+    # --- Data Collection: real images, plus the PRISM simulations with --include_prism ---
+    logger.info(f"Collecting file paths (include_prism={args.include_prism})...")
+    samples = collect_from_args(args, logger)
+    all_labels = [s.label for s in samples]
     logger.info("Pre-filtering disabled - corrupted files will be handled at runtime via inpainting")
     
     # --- Calculate and report class imbalance ---
@@ -548,9 +545,9 @@ def main():
         logger.warning(f"⚠ SEVERE CLASS IMBALANCE ({imbalance_ratio:.1f}:1) - May cause degenerate models!")
         logger.warning("  Consider: (1) Collect more lens data, (2) Use lower lens_weight_multiplier (1.0-1.1)")
     
-    # --- Stratified 70-20-10 Train/Val/Test split (includes the data leak check) ---
+    # --- Train/Val/Test split: real images by sky region, PRISM 70-20-10 (includes the data leak check) ---
     logger.info("Data split:")
-    splits = split_files(all_paths, all_labels, all_data_sources, args.seed, logger)
+    splits = split_samples(samples, args.val_region, args.test_region, args.seed, logger)
     train_paths, train_labels, train_sources = splits["train"]
     val_paths, val_labels, val_sources = splits["val"]
     test_paths, test_labels, test_sources = splits["test"]
