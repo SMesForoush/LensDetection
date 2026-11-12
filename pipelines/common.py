@@ -72,7 +72,7 @@ def build_arg_parser(description):
     t.add_argument("--seed", type=int, default=42)
 
     s = p.add_argument_group("system")
-    s.add_argument("--gpu", action="store_true")
+    s.add_argument("--gpu", action="store_true", help="Use a GPU: NVIDIA (CUDA) if present, else Apple Silicon (MPS)")
     s.add_argument("--multi_gpu", action="store_true")
     s.add_argument("--num_workers", type=int, default=8)
     s.add_argument("--prefetch_factor", type=int, default=4)
@@ -107,6 +107,27 @@ def setup_logging(output_dir, name):
     if "SLURM_CPUS_PER_TASK" in os.environ:
         torch.set_num_threads(int(os.environ["SLURM_CPUS_PER_TASK"]))
     return logger
+
+
+def mps_available():
+    mps = getattr(torch.backends, "mps", None)
+    return bool(mps is not None and mps.is_available())
+
+
+def select_device(use_gpu, logger=None):
+    """--gpu: an NVIDIA GPU (CUDA) if present, else the Apple Silicon GPU (MPS), else the CPU."""
+    if use_gpu and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif use_gpu and mps_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+        if use_gpu and logger:
+            logger.warning("--gpu given but no CUDA or Apple (MPS) GPU is available; running on the CPU")
+    if logger:
+        logger.info(f"Using device: {device}" + (" (Apple GPU; mixed precision is CUDA-only, so it is off)"
+                                                  if device.type == "mps" else ""))
+    return device
 
 
 # --------------------------------------------------------------------------------------
@@ -299,7 +320,7 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
         train_transform: ModelInputTransform for training; evaluation uses it without augmentation.
     """
     output_dir = Path(args.output_dir)
-    device = torch.device("cuda" if args.gpu and torch.cuda.is_available() else "cpu")
+    device = select_device(args.gpu, logger)
     use_amp = bool(args.mixed_precision and device.type == "cuda")
     eval_transform = train_transform.without_augmentation()
 

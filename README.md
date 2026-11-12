@@ -52,8 +52,12 @@ python3 scripts/pack_for_laptop.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS
     --weights_dir weights --out /scratch/$USER/cosmos_laptop_data.zip
 # on the laptop
 rsync -P roihu:/scratch/$USER/cosmos_laptop_data.zip . && unzip cosmos_laptop_data.zip -d cosmos_data
-python train.py --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses --output_dir results/local
+python train.py --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses --output_dir results/local --gpu
 ```
+
+`--gpu` uses an NVIDIA GPU (CUDA) when there is one, and otherwise the Apple Silicon GPU (MPS) on a Mac, in
+`train.py` and all three pipelines. Mixed precision stays CUDA-only. On an M-series Mac, CMU DeepLens epochs ran
+about 20x faster on the GPU than on the CPU.
 
 ## Fine-tuning pretrained lens finders
 
