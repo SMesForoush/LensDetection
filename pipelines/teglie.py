@@ -46,7 +46,7 @@ def parse_args(argv=None):
     g.add_argument("--clip_pct", type=float, default=99.5)
     g.add_argument("--flux_scale", type=float, default=1.0)
     # Original training: Adam, lr 1e-4 with exponential decay, binary cross-entropy, l2(0.01) on conv/attention
-    p.set_defaults(bands="2,3,1,0", learning_rate=1e-4, weight_decay=1e-2, batch_size=64, epochs=50)
+    p.set_defaults(bands="2,3,1,0", learning_rate=1e-4, weight_decay=1e-2, batch_size=64, epochs=50, min_epochs=20)
     return p.parse_args(argv)
 
 
