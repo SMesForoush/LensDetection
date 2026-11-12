@@ -21,11 +21,11 @@ export HF_HUB_OFFLINE=1   # use the weights downloaded on the login node
 MODEL="deeplens"
 SCRATCH_DIR="/scratch/ituomine/COSMOS-WEB-LENS/LensDetection"
 # Real images (COWLS lenses, look-alikes, hand-checked non-lenses) are read from the mock-lens-modeling project,
-# paths in datasets/cosmos_real_manifest.csv. Add the PRISM simulations with  INCLUDE_PRISM=1 sbatch slurm/finetune.sh
+# paths in datasets/cosmos_real_manifest.csv. Add the MIRAGE-v1.1 simulations (datasets/mirage_v1_1_manifest.csv) with
+#   INCLUDE_MIRAGE=1 sbatch slurm/finetune.sh
 COSMOS_ROOT="/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling"
-PRISM_DIR="/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5"
-PRISM_ARGS=()
-[ "${INCLUDE_PRISM:-0}" = 1 ] && PRISM_ARGS=(--include_prism --prism_dir "$PRISM_DIR")
+MIRAGE_ARGS=()
+[ "${INCLUDE_MIRAGE:-0}" = 1 ] && MIRAGE_ARGS=(--include_mirage)
 WEIGHTS_DIR="${WEIGHTS_DIR:-weights}"
 OUTPUT_DIR="$SCRATCH_DIR/finetune_${MODEL}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR" logs
@@ -43,12 +43,12 @@ case "$MODEL" in
         echo "Unknown model '$MODEL'"; exit 1 ;;
 esac
 
-echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: fine-tuning $MODEL (include_prism=${INCLUDE_PRISM:-0}) -> $OUTPUT_DIR"
+echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: fine-tuning $MODEL (include_mirage=${INCLUDE_MIRAGE:-0}) -> $OUTPUT_DIR"
 nvidia-smi
 
 srun python3 -m "pipelines.$MODEL" \
     --cosmos_root "$COSMOS_ROOT" \
-    "${PRISM_ARGS[@]}" \
+    "${MIRAGE_ARGS[@]}" \
     --output_dir "$OUTPUT_DIR" \
     --max_samples_per_class 30000 \
     --lens_weight_multiplier 1.2 \

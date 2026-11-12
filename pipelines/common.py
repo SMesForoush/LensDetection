@@ -1,7 +1,7 @@
 """Shared fine-tuning machinery for the pretrained lens-finder pipelines.
 
 Mirrors train.py so results are directly comparable with LensNet:
-- same data sources and split (datasets/sources.py): real images by sky region, optional PRISM data 70/20/10
+- same data sources and split (datasets/sources.py): split by sky region, optional MIRAGE-v1.1 simulations
 - LensDatasetMemoryEfficient (inpainting + outlier clipping) as the base dataset
 - class-weighted cross-entropy with label smoothing, AdamW, AMP, gradient clipping
 - model selection on validation F2 subject to a minimum specificity, early stopping
@@ -330,9 +330,9 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
                    "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
                    **(extra_info or {})}, f, indent=2, default=str)
 
-    logger.info(f"Collecting files (include_prism={args.include_prism})...")
+    logger.info(f"Collecting files (include_mirage={args.include_mirage})...")
     samples = collect_from_args(args, logger)
-    splits = split_samples(samples, args.val_region, args.test_region, args.seed, logger)
+    splits = split_samples(samples, args.val_region, args.test_region, logger)
     train_loader = make_loader(*splits["train"][:2], train_transform, args, shuffle=True)
     val_loader = make_loader(*splits["val"][:2], eval_transform, args, shuffle=False)
     test_loader = make_loader(*splits["test"][:2], eval_transform, args, shuffle=False)
