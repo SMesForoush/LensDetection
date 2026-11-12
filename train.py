@@ -92,6 +92,7 @@ import random
 from datasets.base import LensDatasetMemoryEfficient
 from datasets.sources import add_data_arguments, collect_from_args, split_samples
 from models.lensnet import LensNet
+from pipelines.common import select_device
 # --------------------------------------------------------------------------------------
 # Reproducibility
 # --------------------------------------------------------------------------------------
@@ -381,7 +382,7 @@ def validate_epoch(model, val_loader, criterion, device):
                 skipped_batches += 1
                 continue
             
-            with torch.cuda.amp.autocast():
+            with torch.autocast(device_type="cuda", enabled=device.type == "cuda"):
                 output = model(data)
                 loss = criterion(output, target)
             
@@ -471,7 +472,7 @@ def parse_arguments():
     parser.add_argument("--weight_decay", type=float, default=1e-2, help="Weight decay for AdamW (L2 regularization)")
     parser.add_argument("--dropout", type=float, default=0.6, help="Dropout rate (0.5-0.7 recommended, higher = more regularization)")
     parser.add_argument("--lens_weight_multiplier", type=float, default=1.0, help="Multiplier for lens class weight (1.0=balanced, >1 penalizes missing lenses more, use 1.0-1.1)")
-    parser.add_argument("--gpu", action="store_true", help="Use GPU")
+    parser.add_argument("--gpu", action="store_true", help="Use a GPU: NVIDIA (CUDA) if present, else Apple Silicon (MPS)")
     parser.add_argument("--multi_gpu", action="store_true", help="Use multiple GPUs")
     parser.add_argument("--num_workers", type=int, default=8, help="Data loading workers (increased from 4 to 8 for faster data loading)")
     parser.add_argument("--accumulation_steps", type=int, default=1, help="Gradient accumulation steps (simulate larger batch size without OOM)")
@@ -523,8 +524,7 @@ def main():
         json.dump(system_info, f, indent=2)
 
     logger.info("Starting Research-Grade ML Pipeline")
-    device = torch.device("cuda" if args.gpu and torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
+    device = select_device(args.gpu, logger)  # CUDA, else Apple Silicon GPU (MPS), else CPU
     
     # --- Data Collection: real images, plus the PRISM simulations with --include_prism ---
     logger.info(f"Collecting file paths (include_prism={args.include_prism})...")
@@ -572,7 +572,7 @@ def main():
     dataloader_kwargs = {
         'batch_size': args.batch_size,
         'num_workers': args.num_workers,
-        'pin_memory': True,
+        'pin_memory': device.type == 'cuda',  # not supported for the Apple GPU (MPS)
         'persistent_workers': args.persistent_workers if args.num_workers > 0 else False,
         'prefetch_factor': args.prefetch_factor if args.num_workers > 0 else None,
     }
