@@ -66,6 +66,8 @@ def build_arg_parser(description):
     t.add_argument("--accumulation_steps", type=int, default=1)
     t.add_argument("--min_specificity", type=float, default=0.4, help="Min val specificity for model selection")
     t.add_argument("--early_stop_patience", type=int, default=10)
+    t.add_argument("--min_epochs", type=int, default=0,
+                   help="Never stop early before this many epochs have been trained")
     t.add_argument("--checkpoint_freq", type=int, default=0, help="Also save every N epochs (0 = off)")
     t.add_argument("--seed", type=int, default=42)
 
@@ -369,7 +371,7 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
             logger.info(f"  -> new best model saved (F2 {m['f2']:.4f}, spec {m['specificity']:.4f})")
         else:
             epochs_no_improve += 1
-            if epochs_no_improve >= args.early_stop_patience:
+            if epochs_no_improve >= args.early_stop_patience and epoch >= args.min_epochs:
                 logger.info(f"Early stopping after {epochs_no_improve} epochs without improvement")
                 break
 
