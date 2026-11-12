@@ -2,7 +2,7 @@
 """Fine-tune the TEGLIE / Lens Detector 15 CNN+transformer (Thuruthipilly et al. 2022; Grespan et al. 2024).
 
     python -m pipelines.teglie --weights "weights/teglie/Lens Detector 15.h5" \
-        --output_dir ... --gpu [--include_prism --prism_dir ...]
+        --output_dir ... --gpu [--include_mirage]
 
 Weights (see scripts/download_weights.sh):
     "Lens Detector 15.h5"            trained on the Bologna Lens Finding Challenge (KiDS-like) simulations

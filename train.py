@@ -6,7 +6,7 @@ Key Features:
 - Dynamic data loading: memory-efficient on-demand loading
 - No augmentation: preserves original astronomical data integrity
 - No normalization: uses raw pixel values for training
-- Real-data split by sky region: train/validation/test regions (datasets/sources.py); optional PRISM data 70-20-10
+- Split by sky region: train/validation/test regions (datasets/sources.py); optional MIRAGE-v1.1 simulations
 - Recall-focused: optimized for maximizing lens detection (high recall)
 - Comprehensive metrics: recall, precision, F1, F2, specificity, NPV
 - Early stopping: based on validation F2-score with min specificity constraint to prevent overfitting
@@ -44,9 +44,8 @@ Quality Assurance:
 Usage on Roihu (real COWLS lenses, look-alikes and hand-checked non-lenses; see datasets/sources.py):
 python train.py --output_dir /scratch/ituomine/COSMOS-WEB-LENS/LensDetection/lensnet_real --gpu
 
-Real data plus the PRISM simulations:
-python train.py --include_prism --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
-  --output_dir ... --gpu
+Real data plus the MIRAGE-v1.1 simulations (split by sky region too):
+python train.py --include_mirage --output_dir ... --gpu
 
 References:
 - Inpainting approach inspired by Bertalmio et al. (2000) "Image Inpainting"
@@ -526,8 +525,8 @@ def main():
     logger.info("Starting Research-Grade ML Pipeline")
     device = select_device(args.gpu, logger)  # CUDA, else Apple Silicon GPU (MPS), else CPU
     
-    # --- Data Collection: real images, plus the PRISM simulations with --include_prism ---
-    logger.info(f"Collecting file paths (include_prism={args.include_prism})...")
+    # --- Data Collection: real images, plus the MIRAGE simulations with --include_mirage ---
+    logger.info(f"Collecting file paths (include_mirage={args.include_mirage})...")
     samples = collect_from_args(args, logger)
     all_labels = [s.label for s in samples]
     logger.info("Pre-filtering disabled - corrupted files will be handled at runtime via inpainting")
@@ -545,9 +544,9 @@ def main():
         logger.warning(f"⚠ SEVERE CLASS IMBALANCE ({imbalance_ratio:.1f}:1) - May cause degenerate models!")
         logger.warning("  Consider: (1) Collect more lens data, (2) Use lower lens_weight_multiplier (1.0-1.1)")
     
-    # --- Train/Val/Test split: real images by sky region, PRISM 70-20-10 (includes the data leak check) ---
+    # --- Train/Val/Test split by sky region (includes the data leak check) ---
     logger.info("Data split:")
-    splits = split_samples(samples, args.val_region, args.test_region, args.seed, logger)
+    splits = split_samples(samples, args.val_region, args.test_region, logger)
     train_paths, train_labels, train_sources = splits["train"]
     val_paths, val_labels, val_sources = splits["val"]
     test_paths, test_labels, test_sources = splits["test"]

@@ -29,30 +29,40 @@ four AnomalyMatch lens candidates that were among the non-lenses (104781, 628424
 images within 13" of the validation or test region are dropped, so no training cutout shares pixels with a
 validation or test cutout.
 
-**PRISM simulations (optional).** `--include_prism --prism_dir DIR` adds `cosmos_lens_*.npy` (`prism_lens`, label 1)
-and `cosmos_nonlens_*.npy` (`prism_nonlens`, label 0). They have no sky position and are split 70/20/10 at random
-(stratified), so validation and test then hold both real and PRISM images. `--mock_data_dir` is accepted as
-another name for `--prism_dir`.
+**MIRAGE-v1.1 simulations (optional).** `--include_mirage` adds the images of `datasets/mirage_v1_1_manifest.csv`:
+real DR1 galaxies (hosts) with a simulated lensed arc added (`mirage_lens`, label 1), the same host with the same
+source galaxy placed next to it without lensing (`mirage_companion`, label 0), and the host alone (`mirage_host`,
+label 0). Each image has the sky region of its host, so MIRAGE is split by region together with the real images and
+validation and test then hold both. MIRAGE hosts lie at least 13" from every COWLS lens and no PSF of the 79
+confident lenses was used, so no simulated image contains a COWLS lens. (The PRISM simulations are not used: they are
+made from the COWLS lenses themselves, test lenses included, and have no sky position.)
+
+The MIRAGE manifest is built on Roihu by `scripts/build_mirage_manifest.py` from
+`datasets/mirage_v1_1/training_rows.csv`. It stops if an image is missing or if a host's sky region differs from
+the region table of the real manifest. It leaves out host images that are already in the real manifest (a look-alike
+or hand-checked non-lens there) and the host and companion images of AnomalyMatch candidates.
 
 ```bash
 python train.py --output_dir results/lensnet_real --gpu
-python train.py --include_prism --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
-    --output_dir results/lensnet_real_prism --gpu
-INCLUDE_PRISM=1 sbatch slurm/finetune.sh       # fine-tuning on real + PRISM data
+python scripts/build_mirage_manifest.py --project_dir /scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling   # once
+python train.py --include_mirage --output_dir results/lensnet_real_mirage --gpu
+INCLUDE_MIRAGE=1 sbatch slurm/finetune.sh      # fine-tuning on real + MIRAGE data
 ```
 
-**Running off Roihu.** `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
-only). By default it packs the non-lenses, about 6.9 GB uncompressed. `--with_lenses` also packs the lens cutouts,
-`--prism_dir` the PRISM files and `--weights_dir` the pretrained weights. The script checks that every file
-exists and that the zip will fit before it writes anything.
+**Running off Roihu.** `scripts/pack_for_laptop.py` zips the manifests' images on Roihu (Python 3 standard library
+only). By default it packs the real non-lenses, about 6.9 GB uncompressed. `--with_lenses` also packs the lens
+cutouts, `--with_mirage` the MIRAGE images (roughly 50 GB; `--mirage_hosts N` keeps those of N random host galaxies)
+and `--weights_dir` the pretrained weights. The script checks that every file exists and that the zip will fit
+before it writes anything.
 
 ```bash
 # on Roihu, from the repository
-python3 scripts/pack_for_laptop.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
-    --weights_dir weights --out /scratch/$USER/cosmos_laptop_data.zip
+python3 scripts/pack_for_laptop.py --with_mirage --mirage_hosts 2000 --weights_dir weights \
+    --out /scratch/$USER/cosmos_laptop_data.zip
 # on the laptop
 rsync -P roihu:/scratch/$USER/cosmos_laptop_data.zip . && unzip cosmos_laptop_data.zip -d cosmos_data
-python train.py --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses --output_dir results/local --gpu
+python train.py --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses \
+    --include_mirage --mirage_manifest cosmos_data/mirage_v1_1_manifest.csv --output_dir results/local --gpu
 ```
 
 `--gpu` uses an NVIDIA GPU (CUDA) when there is one, and otherwise the Apple Silicon GPU (MPS) on a Mac, in
@@ -88,7 +98,7 @@ sbatch slurm/finetune.sh deeplens
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
-arguments (`--cosmos_root`, `--val_region`, `--test_region`, `--include_prism`, `--prism_dir`,
+arguments (`--cosmos_root`, `--val_region`, `--test_region`, `--include_mirage`,
 `--max_samples_per_class`, ...), plus:
 
 - `--bands`: which base-data channels feed the model's input slots. The defaults assume the four base
