@@ -245,7 +245,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
   architecture flags.
 
 ### C14. Drop corrupted files instead of zero images
-- **Status:** in progress (`claude/todo-c14-04f233`). New `datasets/quality.py` checks every file in `collect_from_args`
+- **Status:** done ([SMesForoush/LensDetection#10](https://github.com/SMesForoush/LensDetection/pull/10)). New `datasets/quality.py` checks every file in `collect_from_args`
   and `all_real_samples` (before subsampling), cached per data directory in `file_qc.json`, and drops unreadable,
   wrong-shape, > 50 % NaN/inf and all-zero files. Both runners log `dropped N corrupted files` per source, write
   `data_quality_report.json` and add `dropped_corrupted` to `test_results.json`. `__getitem__` raises instead of
