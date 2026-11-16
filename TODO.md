@@ -158,7 +158,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
   `pipelines/common.py`). What is left is the D3 rule itself: swap `best_f2_threshold` and `THRESHOLD_RULE` together.
 
 ### C8. Real-data evaluation script
-- **Status:** in progress (`claude/todo-c8-3ff928`). `pipelines/evaluate_real.py` exists. `run_finetuning` and
+- **Status:** done ([SMesForoush/LensDetection#11](https://github.com/SMesForoush/LensDetection/pull/11)). `pipelines/evaluate_real.py`. `run_finetuning` and
   `train.py` now save the validation threshold in `best_model.pth` (`threshold`, `threshold_rule` =
   `max_f2_on_validation`, a constant in `pipelines/common.py`), so C8 no longer waits for the C7 follow-up. Only the
   rule itself still changes with D3. `train.py` checkpoints also carry `model_name`/`model_config`/`transform`, and
