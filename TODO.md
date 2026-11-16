@@ -104,20 +104,21 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Default:** recall ≥ 0.90. Decide before any real-data result exists.
 
 ### D4. One input size and one intensity normalisation for all models
-- **Status:** open
+- **Status:** Done
 - **Affects:** C9, C11, C12
 - **Question:** Today LensNet sees raw MJy/sr at 300 px, DeepLens uses ZScale at 101 px, TEGLIE a robust clip at
   101 px, and GraViT asinh at 224 px. Downsampling 300 → 101 px gives about 0.089″/px, so a 0.53″ Einstein radius spans
   only about 6 px.
-- **Default:** 300 × 300 px, bands in their natural order 0,1,2,3, and `unit_asinh` (per band, per image, 0.5–99.5
+- **Decision:**  300 × 300 px, bands in their natural order 0,1,2,3, and `unit_asinh` (per band, per image, 0.5–99.5
   percentile, asinh softening 0.1) for every model.
 
 ### D5. Number of seeds, and whether PRISM is big enough
-- **Status:** open
+- **Status:** Done
 - **Affects:** C16, E19
 - **Question:** 5 seeds per architecture (3 if Roihu time is short). Also: with only 80 base lens systems, the synthetic
   test set has 12 systems (300 lens images). Should the PRISM authors be asked for more base systems?
 - **Default:** 5 seeds, and ask for more systems in parallel.
+- **Decision:** : 3 seeds, stay with the 12 systems for now for computation limitations. 
 
 ---
 
