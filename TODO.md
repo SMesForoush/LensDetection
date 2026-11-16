@@ -124,7 +124,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
 ## Code changes (`LensDetection` repo)
 
 ### C6. PRISM-only training mode
-- **Status:** done (PR_LINK). The grouped split shipped in #7. `--train_data {prism,real,both}` (default
+- **Status:** done ([SMesForoush/LensDetection#9](https://github.com/SMesForoush/LensDetection/pull/9)). The grouped split shipped in #7. `--train_data {prism,real,both}` (default
   `prism`, logged as a warning when not given; `--include_prism` = `both`) is in `add_data_arguments`; `--prism_dir`
   now defaults to the Roihu PRISM path. `system_info.json` and `test_results.json` record `train_data` and
   `split_seed`, and `test_results.json` adds `split_sizes`. `slurm/finetune.sh` takes `TRAIN_DATA` (default `prism`).
