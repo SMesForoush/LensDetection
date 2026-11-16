@@ -6,9 +6,15 @@ scripts/build_real_manifest.py from the mock-lens-modeling sample lists):
     real_lens_calibration  COWLS S03-S06 lenses                              label 1
     lookalike              non-lenses that resemble the COWLS lenses         label 0
     real_nonlens           hand-checked non-lenses                           label 0
-Optional, only with --include_prism:
+PRISM simulations (under --prism_dir):
     prism_lens             <prism_dir>/cosmos_lens_*.npy                     label 1
     prism_nonlens          <prism_dir>/cosmos_nonlens_*.npy                  label 0
+
+Which sources train, validate and test a model is set by --train_data:
+    prism  (default) PRISM only. The real manifest is not read at all; real images are kept for the external
+           evaluation (`all_real_samples`), which never influences training, checkpoint or threshold choice.
+    real   real images only, split by sky region.
+    both   real and PRISM images, each split its own way (--include_prism is an old name for this).
 
 Split:
     real   by sky region (0-4, from the project's DR1 tile folds): --test_region -> test, --val_region -> validation,
@@ -36,7 +42,10 @@ REAL_SOURCES = ("real_lens_confident", "real_lens_calibration", "lookalike", "re
 DIR_ARG = {"real_lens_confident": "real_lens_dir", "real_lens_calibration": "real_lens_dir",
            "lookalike": "lookalike_dir", "real_nonlens": "real_nonlens_dir"}
 
+PRISM_DIR = "/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5"
 PRISM_FRACTIONS = (0.70, 0.15, 0.15)  # train / val / test
+TRAIN_DATA_MODES = ("prism", "real", "both")
+DEFAULT_TRAIN_DATA = "prism"
 
 # region: sky region 0-4 for real images, -1 for PRISM; near_regions: other regions within 13" (real only)
 # group: PRISM split unit (lens: base system, non-lens: the file itself); stratum: PRISM split stratum
@@ -52,16 +61,63 @@ def add_data_arguments(parser):
     parser.add_argument("--real_lens_dir", help="Folder of the COWLS lens cutouts (overrides --cosmos_root for lenses)")
     parser.add_argument("--lookalike_dir", help="Folder of the look-alike cutouts (overrides --cosmos_root)")
     parser.add_argument("--real_nonlens_dir", help="Folder of the hand-checked non-lens cutouts (overrides --cosmos_root)")
-    parser.add_argument("--val_region", type=int, default=4, help="Sky region (0-4) of the validation set")
-    parser.add_argument("--test_region", type=int, default=0, help="Sky region (0-4) of the test set")
+    parser.add_argument("--train_data", choices=TRAIN_DATA_MODES,
+                        help="Data that trains, validates and tests the model: 'prism' (PRISM simulations only; the "
+                             "real images are left for external evaluation), 'real' (real images split by sky region) "
+                             f"or 'both'. Default: {DEFAULT_TRAIN_DATA} ('both' with the old --include_prism flag)")
+    parser.add_argument("--val_region", type=int, default=4,
+                        help="Sky region (0-4) of the real validation set (unused with --train_data prism)")
+    parser.add_argument("--test_region", type=int, default=0,
+                        help="Sky region (0-4) of the real test set (unused with --train_data prism)")
     parser.add_argument("--include_prism", action="store_true",
-                        help="Also use the PRISM simulations in --prism_dir (split 70/15/15, grouped by base lens system)")
-    parser.add_argument("--prism_dir", "--mock_data_dir", dest="prism_dir",
-                        help="Directory with cosmos_lens_*.npy / cosmos_nonlens_*.npy (used with --include_prism)")
+                        help="Deprecated: same as --train_data both")
+    parser.add_argument("--prism_dir", "--mock_data_dir", dest="prism_dir", default=PRISM_DIR,
+                        help="Directory with cosmos_lens_*.npy / cosmos_nonlens_*.npy and the PRISM catalogs")
     parser.add_argument("--split_seed", type=int, default=42,
                         help="Seed of the PRISM train/val/test split; keep it fixed when repeating runs with other --seed values")
     parser.add_argument("--max_samples_per_class", type=int, help="Max samples per data source for balancing")
     return parser
+
+
+def resolve_train_data(args, logger=None):
+    """Fill in args.train_data (None = not given on the command line) and return it.
+
+    The default changed from real data (+ PRISM with --include_prism) to PRISM only. Old command lines keep their
+    meaning only if they pass --train_data real, so the default is announced loudly in the log."""
+    if args.train_data is None:
+        args.train_data = "both" if args.include_prism else DEFAULT_TRAIN_DATA
+        if logger:
+            if args.include_prism:
+                logger.warning("--include_prism is deprecated; using --train_data both")
+            else:
+                logger.warning(f"--train_data not given: using '{DEFAULT_TRAIN_DATA}' (train, validate and test on "
+                               f"PRISM only). Until this change the default was real data; pass --train_data real "
+                               f"for the old behaviour.")
+    elif args.include_prism and args.train_data == "real":
+        raise ValueError("--include_prism contradicts --train_data real; use --train_data both")
+    return args.train_data
+
+
+def uses_real(train_data):
+    return train_data in ("real", "both")
+
+
+def uses_prism(train_data):
+    return train_data in ("prism", "both")
+
+
+def real_dirs(args):
+    """{source: folder} from the --real_lens_dir / --lookalike_dir / --real_nonlens_dir overrides."""
+    return {s: getattr(args, DIR_ARG[s]) for s in REAL_SOURCES}
+
+
+def all_real_samples(args, logger=None):
+    """Every real image in the manifest, unsplit and unsubsampled (for the external evaluation on real data)."""
+    samples = real_samples(args.real_manifest, args.cosmos_root, real_dirs(args), logger)
+    if logger:
+        counts = pd.Series([s.source for s in samples]).value_counts().to_dict()
+        logger.info(f"Real images: {len(samples)} ({sum(s.label for s in samples)} lenses) {counts}")
+    return samples
 
 
 def real_samples(manifest, cosmos_root, dirs=None, logger=None):
@@ -81,7 +137,7 @@ def real_samples(manifest, cosmos_root, dirs=None, logger=None):
 
 def prism_samples(prism_dir):
     if not prism_dir:
-        raise ValueError("--include_prism needs --prism_dir")
+        raise ValueError("PRISM data needs --prism_dir (or use --train_data real)")
     data_dir = Path(prism_dir)
     if not data_dir.is_dir():
         raise FileNotFoundError(f"PRISM directory {data_dir} not found")
@@ -130,10 +186,13 @@ def grouped_split(samples, seed, fractions=PRISM_FRACTIONS):
 
 
 def collect_from_args(args, logger=None):
-    """Every sample of the requested sources, at most --max_samples_per_class per source."""
-    dirs = {s: getattr(args, DIR_ARG[s]) for s in REAL_SOURCES}
-    samples = real_samples(args.real_manifest, args.cosmos_root, dirs, logger)
-    if args.include_prism:
+    """Every sample of the sources that --train_data selects, at most --max_samples_per_class per source.
+    With --train_data prism the real manifest is not read."""
+    mode = resolve_train_data(args, logger)
+    samples = []
+    if uses_real(mode):
+        samples += real_samples(args.real_manifest, args.cosmos_root, real_dirs(args), logger)
+    if uses_prism(mode):
         samples += prism_samples(args.prism_dir)
     by_source = {}
     for s in samples:
@@ -148,15 +207,16 @@ def collect_from_args(args, logger=None):
             logger.info(f"  {source}: {len(group)} samples")
     n_lens = sum(s.label for s in out)
     if logger:
-        logger.info(f"Total: {len(out)} files, lenses: {n_lens}, non-lenses: {len(out) - n_lens}"
-                    + ("" if args.include_prism else " (real data only; --include_prism adds the PRISM simulations)"))
+        logger.info(f"Total: {len(out)} files, lenses: {n_lens}, non-lenses: {len(out) - n_lens} (--train_data {mode})")
     return out
 
 
 def split_samples(samples, val_region, test_region, seed, logger=None):
     """Real images by sky region, PRISM images 70/15/15 grouped by base lens system (seed = the PRISM split seed).
+    The regions only matter when there are real images; for PRISM-only samples they are ignored.
     Returns {'train'|'val'|'test': (paths, labels, sources)}."""
-    if val_region == test_region or not {val_region, test_region} <= set(range(5)):
+    has_real = any(s.region >= 0 for s in samples)
+    if has_real and (val_region == test_region or not {val_region, test_region} <= set(range(5))):
         raise ValueError(f"--val_region and --test_region must be two different regions in 0-4, got {val_region}, {test_region}")
     parts = {"train": [], "val": [], "test": []}
     dropped = 0
@@ -190,8 +250,11 @@ def split_samples(samples, val_region, test_region, seed, logger=None):
             continue
         raise ValueError(f"The {name} split needs both classes, found {sum(y)} lenses and {len(y) - sum(y)} non-lenses")
     if logger:
-        logger.info(f"  real images: test = region {test_region}, validation = region {val_region}, training = the other "
-                    f"regions; {dropped} training-region images within 13\" of the validation/test regions dropped")
+        if has_real:
+            logger.info(f"  real images: test = region {test_region}, validation = region {val_region}, training = the "
+                        f"other regions; {dropped} training-region images within 13\" of the validation/test regions dropped")
+        else:
+            logger.info("  no real images: --val_region / --test_region unused")
         for name, (p, y, src) in splits.items():
             counts = pd.Series(src).value_counts().to_dict()
             logger.info(f"  {name:5s}: {len(p)} samples - lens: {sum(y)}, non-lens: {len(y) - sum(y)} {counts}")
