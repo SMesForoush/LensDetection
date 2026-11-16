@@ -37,6 +37,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.base import LensDatasetMemoryEfficient  # noqa: E402
+from datasets.quality import dropped_counts, save_report  # noqa: E402
 from datasets.sources import add_data_arguments, collect_from_args, resolve_train_data, split_samples  # noqa: E402
 from datasets.transforms import TransformedDataset  # noqa: E402
 
@@ -342,7 +343,9 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
                    **(extra_info or {})}, f, indent=2, default=str)
 
     logger.info(f"Collecting files (--train_data {args.train_data})...")
-    samples = collect_from_args(args, logger)
+    samples, quality_report = collect_from_args(args, logger)  # corrupted files dropped (datasets/quality.py)
+    data_info["dropped_corrupted"] = dropped_counts(quality_report)
+    logger.info(f"Data quality report saved to {save_report(quality_report, output_dir)}")
     splits = split_samples(samples, args.val_region, args.test_region, args.split_seed, logger)
     train_loader = make_loader(*splits["train"][:2], train_transform, args, shuffle=True)
     val_loader = make_loader(*splits["val"][:2], eval_transform, args, shuffle=False)

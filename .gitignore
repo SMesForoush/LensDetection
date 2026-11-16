@@ -2,4 +2,4 @@ weights/
 __pycache__/
 *.pyc
 .venv
-logs/
+logs/file_qc.json

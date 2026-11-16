@@ -29,12 +29,18 @@ Split:
 Real files are found under --cosmos_root (the manifest's `file` column), or by file name in --real_lens_dir /
 --lookalike_dir / --real_nonlens_dir when those are given. A PRISM directory may hold its .npy files directly or in
 an `npy/` subdirectory.
+
+Corrupted files (unreadable, wrong shape, > 50 % NaN/inf pixels, or all zero) are dropped before splitting and
+subsampling, see datasets/quality.py. `collect_from_args` and `all_real_samples` return the drop report with the samples;
+the runners save it as data_quality_report.json.
 """
 from collections import namedtuple
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from datasets.quality import drop_corrupted
 
 COSMOS_ROOT = "/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling"
 REAL_MANIFEST = Path(__file__).resolve().parent / "cosmos_real_manifest.csv"
@@ -112,12 +118,14 @@ def real_dirs(args):
 
 
 def all_real_samples(args, logger=None):
-    """Every real image in the manifest, unsplit and unsubsampled (for the external evaluation on real data)."""
+    """Every usable real image in the manifest, unsplit and unsubsampled (for the external evaluation on real data).
+    Returns (samples, quality_report); corrupted files are dropped (datasets/quality.py)."""
     samples = real_samples(args.real_manifest, args.cosmos_root, real_dirs(args), logger)
+    samples, report = drop_corrupted(samples, logger=logger)
     if logger:
         counts = pd.Series([s.source for s in samples]).value_counts().to_dict()
         logger.info(f"Real images: {len(samples)} ({sum(s.label for s in samples)} lenses) {counts}")
-    return samples
+    return samples, report
 
 
 def real_samples(manifest, cosmos_root, dirs=None, logger=None):
@@ -186,14 +194,18 @@ def grouped_split(samples, seed, fractions=PRISM_FRACTIONS):
 
 
 def collect_from_args(args, logger=None):
-    """Every sample of the sources that --train_data selects, at most --max_samples_per_class per source.
-    With --train_data prism the real manifest is not read."""
+    """Every usable sample of the sources that --train_data selects, at most --max_samples_per_class per source.
+    With --train_data prism the real manifest is not read. Corrupted files are dropped before subsampling
+    (datasets/quality.py). Returns (samples, quality_report)."""
     mode = resolve_train_data(args, logger)
     samples = []
     if uses_real(mode):
         samples += real_samples(args.real_manifest, args.cosmos_root, real_dirs(args), logger)
     if uses_prism(mode):
         samples += prism_samples(args.prism_dir)
+    if logger:
+        logger.info("Checking files for corruption:")
+    samples, report = drop_corrupted(samples, logger=logger)
     by_source = {}
     for s in samples:
         by_source.setdefault(s.source, []).append(s)
@@ -208,7 +220,7 @@ def collect_from_args(args, logger=None):
     n_lens = sum(s.label for s in out)
     if logger:
         logger.info(f"Total: {len(out)} files, lenses: {n_lens}, non-lenses: {len(out) - n_lens} (--train_data {mode})")
-    return out
+    return out, report
 
 
 def split_samples(samples, val_region, test_region, seed, logger=None):

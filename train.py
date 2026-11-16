@@ -94,6 +94,7 @@ import random
 
 # internal imports
 from datasets.base import LensDatasetMemoryEfficient
+from datasets.quality import dropped_counts, save_report
 from datasets.sources import add_data_arguments, collect_from_args, resolve_train_data, split_samples
 from models.lensnet import LensNet
 from pipelines.common import best_f2_threshold, select_device, split_sizes
@@ -534,9 +535,10 @@ def main():
     
     # --- Data Collection: the sources selected by --train_data (PRISM, real or both) ---
     logger.info(f"Collecting file paths (--train_data {args.train_data})...")
-    samples = collect_from_args(args, logger)
+    samples, quality_report = collect_from_args(args, logger)  # corrupted files dropped (datasets/quality.py)
+    data_info['dropped_corrupted'] = dropped_counts(quality_report)
+    logger.info(f"Data quality report saved to {save_report(quality_report, output_dir)}")
     all_labels = [s.label for s in samples]
-    logger.info("Pre-filtering disabled - corrupted files will be handled at runtime via inpainting")
     
     # --- Calculate and report class imbalance ---
     lens_count = sum(all_labels)
@@ -966,52 +968,10 @@ def main():
     generate_validation_plots(training_history, output_dir)
     logger.info(f"Validation plots saved to {output_dir / 'validation_metrics.png'}")
     
-    # --- Report Data Quality Statistics ---
-    # Note: Statistics are collected with num_workers=0 because multiprocessing 
-    # workers track their own statistics independently, making aggregation complex
-    logger.info("\n" + "="*80)
-    logger.info("DATA QUALITY CONTROL REPORT")
-    logger.info("Collecting statistics by reprocessing sample of dataset...")
-    logger.info("="*80)
-    
-    # Collect statistics by sampling dataset with single-process loading
-    for split_name, paths, labels_sub in [("Training", train_paths[:1000], train_labels[:1000]),
-                                          ("Validation", val_paths[:500], val_labels[:500]),
-                                          ("Test", test_paths[:500], test_labels[:500])]:
-        temp_dataset = LensDatasetMemoryEfficient(paths, labels_sub, track_statistics=True)
-        
-        # Process samples to collect statistics (single-threaded)
-        for i in range(len(temp_dataset)):
-            _ = temp_dataset[i]  # Trigger __getitem__ to collect stats
-        
-        stats = temp_dataset.get_inpainting_statistics()
-        logger.info(f"\n{split_name} Set Statistics (sampled {len(paths)} files):")
-        logger.info(f"  Total images loaded: {stats['total_loaded']}")
-        logger.info(f"  Images requiring inpainting: {stats['files_inpainted']} ({100*stats['files_inpainted']/max(stats['total_loaded'],1):.2f}%)")
-        logger.info(f"  Total pixels inpainted: {stats['total_pixels_inpainted']:,}")
-        logger.info(f"  Images rejected: {stats['files_rejected']}")
-        
-        if stats.get('avg_corruption_pct'):
-            logger.info(f"  Corruption statistics:")
-            logger.info(f"    - Average: {stats['avg_corruption_pct']:.4f}%")
-            logger.info(f"    - Median: {stats['median_corruption_pct']:.4f}%")
-            logger.info(f"    - Maximum: {stats['max_corruption_pct']:.4f}%")
-    
-    # Save data quality report (from sampled statistics)
-    quality_report = {
-        'note': 'Statistics collected from sample of dataset due to multiprocessing limitations',
-        'training_sample_size': min(1000, len(train_paths)),
-        'validation_sample_size': min(500, len(val_paths)),
-        'test_sample_size': min(500, len(test_paths)),
-        'training': temp_dataset.get_inpainting_statistics() if 'Training' in split_name else {},
-        'validation': {},
-        'test': {}
-    }
-    with open(output_dir / "data_quality_report.json", "w") as f:
-        json.dump(quality_report, f, indent=4)
-    logger.info(f"\nData quality report saved to {output_dir / 'data_quality_report.json'}")
-    logger.info("="*80)
-    
+    # --- Data quality: corrupted files were dropped before the split (datasets/quality.py) ---
+    logger.info("Corrupted files dropped per source: " + ", ".join(f"{k} {v}" for k, v in data_info['dropped_corrupted'].items())
+                + f" (details in {output_dir / 'data_quality_report.json'})")
+
     logger.info("\nTraining pipeline completed successfully!")
 
 def plot_confusion_matrix(cm, output_dir, threshold=0.5, source_breakdown=None):

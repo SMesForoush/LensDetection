@@ -31,21 +31,27 @@ from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
 import random
 
+from datasets.quality import CORRUPTION_THRESHOLD, TARGET_SHAPE, to_target_shape
+
 
 class LensDatasetMemoryEfficient(Dataset):
     """Memory-efficient dataset that loads files on-demand without augmentation or normalization.
     
     Implements research-grade data quality control with intelligent inpainting of corrupted pixels.
+
+    Corrupted files must be dropped before the dataset is built (datasets/quality.py, called by
+    datasets/sources.collect_from_args). A file that still fails to load, cannot be brought to 4 x 300 x 300, or has more
+    than `corruption_threshold` invalid pixels raises a RuntimeError instead of becoming an all-zero image.
     
     Args:
         file_paths: List of paths to .npy files
         labels: Corresponding labels (0=non-lens, 1=lens)
-        corruption_threshold: Maximum fraction of invalid pixels before rejecting (default: 0.5)
+        corruption_threshold: Maximum fraction of invalid pixels that is inpainted; more raises (default: 0.5)
         inpainting_method: Method for replacing invalid pixels ('gaussian_weighted' or 'mean')
         track_statistics: Whether to track inpainting statistics for analysis
     """
     
-    def __init__(self, file_paths, labels, corruption_threshold=0.5, 
+    def __init__(self, file_paths, labels, corruption_threshold=CORRUPTION_THRESHOLD, 
                  inpainting_method='gaussian_weighted', track_statistics=True, device=None):
         self.file_paths = file_paths
         self.labels = labels
@@ -59,7 +65,6 @@ class LensDatasetMemoryEfficient(Dataset):
             'total_loaded': 0,
             'files_inpainted': 0,
             'total_pixels_inpainted': 0,
-            'files_rejected': 0,
             'corruption_percentages': []
         }
         
@@ -184,7 +189,6 @@ class LensDatasetMemoryEfficient(Dataset):
                 - total_loaded: Total images processed
                 - files_inpainted: Number of files requiring inpainting
                 - total_pixels_inpainted: Total corrupted pixels fixed
-                - files_rejected: Files too corrupted to salvage
                 - avg_corruption_pct: Average corruption percentage
                 - max_corruption_pct: Maximum corruption encountered
         """
@@ -196,108 +200,74 @@ class LensDatasetMemoryEfficient(Dataset):
         return stats
 
     def __getitem__(self, idx):
-        """Load and preprocess a single sample with robust corruption handling.
+        """Load and preprocess a single sample.
         
         Quality control pipeline:
-        1. Load data from disk
+        1. Load data from disk and bring it to 4 x 300 x 300
         2. Detect and quantify corruption (inf/nan pixels)
-        3. Apply intelligent inpainting if corruption < threshold
-        4. Reject if corruption > threshold (preserves dataset quality)
-        5. Clip extreme outliers for numerical stability
-        6. Convert to PyTorch tensor
+        3. Inpaint if the invalid fraction is at most the threshold; raise otherwise
+        4. Clip extreme outliers for numerical stability
+        5. Convert to PyTorch tensor
         
         Args:
             idx: Sample index
             
         Returns:
             Tuple of (image_tensor, label_tensor)
+
+        Raises:
+            RuntimeError: the file is corrupted. Such files should have been dropped by datasets/quality.py; raising
+                keeps them from silently reaching the model as all-zero images.
         """
+        path = self.file_paths[idx]
         self.inpainting_stats['total_loaded'] += 1
-        
+
         try:
             # Load data as float32 - no normalization applied
-            data = np.load(self.file_paths[idx], mmap_mode='r').astype(np.float32)
-            
-            if data.shape != (4, 300, 300):
-                 data = self._resize_or_pad_to_target(data, (4, 300, 300))
-
-            # === Corruption detection and quality control ===
-            if not np.all(np.isfinite(data)):
-                invalid_count = np.sum(~np.isfinite(data))
-                invalid_pct = 100 * invalid_count / data.size
-                
-                # Decision criterion: reject if >50% corrupted
-                # This threshold chosen based on signal preservation requirements
-                if invalid_pct > (self.corruption_threshold * 100):
-                    if self.track_statistics:
-                        self.inpainting_stats['files_rejected'] += 1
-                        self.inpainting_stats['corruption_percentages'].append(invalid_pct)
-                    
-                    print(f"[DATA_QC] Rejecting {Path(self.file_paths[idx]).name}: "
-                          f"{invalid_pct:.2f}% corrupted (threshold: {self.corruption_threshold*100}%)")
-                    return torch.zeros(4, 300, 300, dtype=torch.float32), torch.tensor(self.labels[idx], dtype=torch.long)
-                
-                # Inpaint corrupted pixels
-                if self.track_statistics:
-                    self.inpainting_stats['files_inpainted'] += 1
-                    self.inpainting_stats['corruption_percentages'].append(invalid_pct)
-                
-                print(f"[DATA_QC] Inpainting {Path(self.file_paths[idx]).name}: "
-                      f"{invalid_count} pixels ({invalid_pct:.3f}%) using {self.inpainting_method}")
-                
-                data = self._inpaint_invalid_pixels(data)
-                
-                # Verify inpainting success
-                if not np.all(np.isfinite(data)):
-                    print(f"[ERROR] Inpainting failed for {self.file_paths[idx]} - rejecting")
-                    if self.track_statistics:
-                        self.inpainting_stats['files_rejected'] += 1
-                    return torch.zeros(4, 300, 300, dtype=torch.float32), torch.tensor(self.labels[idx], dtype=torch.long)
-            
-            # === Outlier clipping for numerical stability ===
-            # Clip at 10× the 99.9th percentile to prevent overflow
-            # while preserving dynamic range of astronomical data
-            percentile_99 = np.percentile(np.abs(data), 99.9)
-            if percentile_99 > 0:
-                clip_value = percentile_99 * 10
-                data = np.clip(data, -clip_value, clip_value)
-
-            # Convert to PyTorch tensor
-            x = torch.from_numpy(data.copy())
-            y = torch.tensor(self.labels[idx], dtype=torch.long)
-            
-            return x.float(), y
-        
+            data = to_target_shape(np.load(path, mmap_mode='r').astype(np.float32), TARGET_SHAPE)
         except Exception as e:
-            print(f"[ERROR] Fatal error loading {self.file_paths[idx]}: {e}")
+            raise RuntimeError(f"Cannot load {path}: {type(e).__name__}: {e}. Corrupted files should be dropped "
+                               f"before training (datasets/quality.py).") from e
+
+        # === Corruption detection and quality control ===
+        if not np.all(np.isfinite(data)):
+            invalid_count = np.sum(~np.isfinite(data))
+            invalid_pct = 100 * invalid_count / data.size
+
+            if invalid_pct > (self.corruption_threshold * 100):
+                raise RuntimeError(f"{path}: {invalid_pct:.2f}% NaN/inf pixels (threshold "
+                                   f"{self.corruption_threshold * 100:g}%). Corrupted files should be dropped before "
+                                   f"training (datasets/quality.py).")
+
+            # Inpaint corrupted pixels
             if self.track_statistics:
-                self.inpainting_stats['files_rejected'] += 1
-            return torch.zeros(4, 300, 300, dtype=torch.float32), torch.tensor(0, dtype=torch.long)
+                self.inpainting_stats['files_inpainted'] += 1
+                self.inpainting_stats['corruption_percentages'].append(invalid_pct)
+
+            print(f"[DATA_QC] Inpainting {Path(path).name}: "
+                  f"{invalid_count} pixels ({invalid_pct:.3f}%) using {self.inpainting_method}")
+
+            data = self._inpaint_invalid_pixels(data)
+            if not np.all(np.isfinite(data)):
+                raise RuntimeError(f"Inpainting failed for {path}")
+        if not np.any(data):
+            raise RuntimeError(f"{path} is all zero. Corrupted files should be dropped before training "
+                               f"(datasets/quality.py).")
+
+        # === Outlier clipping for numerical stability ===
+        # Clip at 10× the 99.9th percentile to prevent overflow
+        # while preserving dynamic range of astronomical data
+        percentile_99 = np.percentile(np.abs(data), 99.9)
+        if percentile_99 > 0:
+            clip_value = percentile_99 * 10
+            data = np.clip(data, -clip_value, clip_value)
+
+        # Convert to PyTorch tensor
+        x = torch.from_numpy(data.copy())
+        y = torch.tensor(self.labels[idx], dtype=torch.long)
+
+        return x.float(), y
 
     def _resize_or_pad_to_target(self, data, target_size):
-        """Resize or pad numpy array to target size (4, 300, 300)"""
-        channels, target_h, target_w = target_size
-        
-        if data.ndim == 3 and data.shape[0] == 4:
-            pass
-        elif data.ndim == 3 and data.shape[-1] == 4:
-            data = data.transpose(2, 0, 1)
-        else:
-            if data.size == np.prod(target_size):
-                return data.reshape(target_size)
-            else:
-                # Fallback to a zero array if reshaping is impossible
-                print(f"[WARNING] Cannot reshape {data.shape}, returning zero array.")
-                return np.zeros(target_size, dtype=np.float32)
-
-        current_channels, current_h, current_w = data.shape
-        
-        if current_channels != channels:
-            raise ValueError(f"Channel mismatch: got {current_channels}, expected {channels}")
-        
-        output = np.zeros(target_size, dtype=data.dtype)
-        h_use, w_use = min(current_h, target_h), min(current_w, target_w)
-        h_offset, w_offset = (target_h - h_use) // 2, (target_w - w_use) // 2
-        
-        output[:, h_offset:h_offset+h_use, w_offset:w_offset+w_use] = data[:, :h_use, :w_use]
-        return output
+        """Resize or pad numpy array to target size (4, 300, 300); raises ValueError if impossible."""
+        return to_target_shape(data, target_size)
