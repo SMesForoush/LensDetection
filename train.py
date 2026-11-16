@@ -92,7 +92,7 @@ import random
 from datasets.base import LensDatasetMemoryEfficient
 from datasets.sources import add_data_arguments, collect_from_args, split_samples
 from models.lensnet import LensNet
-from pipelines.common import select_device
+from pipelines.common import best_f2_threshold, select_device
 # --------------------------------------------------------------------------------------
 # Reproducibility
 # --------------------------------------------------------------------------------------
@@ -545,9 +545,9 @@ def main():
         logger.warning(f"⚠ SEVERE CLASS IMBALANCE ({imbalance_ratio:.1f}:1) - May cause degenerate models!")
         logger.warning("  Consider: (1) Collect more lens data, (2) Use lower lens_weight_multiplier (1.0-1.1)")
     
-    # --- Train/Val/Test split: real images by sky region, PRISM 70-20-10 (includes the data leak check) ---
+    # --- Train/Val/Test split: real images by sky region, PRISM 70/15/15 grouped by base lens system (includes the data leak check) ---
     logger.info("Data split:")
-    splits = split_samples(samples, args.val_region, args.test_region, args.seed, logger)
+    splits = split_samples(samples, args.val_region, args.test_region, args.split_seed, logger)
     train_paths, train_labels, train_sources = splits["train"]
     val_paths, val_labels, val_sources = splits["val"]
     test_paths, test_labels, test_sources = splits["test"]
@@ -790,32 +790,26 @@ def main():
     # Check if best model exists, otherwise use final model
     best_model_path = output_dir / "best_model.pth"
     if best_model_path.exists():
-        checkpoint = torch.load(best_model_path)
+        checkpoint = torch.load(best_model_path, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         logger.info(f"Loaded best model from epoch {checkpoint['epoch']} (F2: {checkpoint.get('best_val_f2', 0):.4f}, Recall: {checkpoint.get('best_val_recall', 0):.4f})")
     else:
         logger.warning("No best model saved (validation criteria never met). Using final epoch model for evaluation.")
         logger.warning(f"This may indicate: (1) min_specificity={min_specificity} threshold too high, or (2) model not converging")
     
+    # The decision threshold is chosen on the validation set only (max F2, same rule as pipelines/common.py) and then
+    # frozen; the test set is scored once at that threshold and never used to pick it.
+    val_metrics_final = validate_epoch(model, val_loader, criterion, device)
+    val_targets = val_metrics_final['targets']
+    val_scores = val_metrics_final['scores']
+    optimal_threshold = best_f2_threshold(val_targets, val_scores)
+    logger.info(f"Decision threshold {optimal_threshold:.3f} chosen on the validation set (max F2), frozen for the test set")
+
     test_metrics = validate_epoch(model, test_loader, criterion, device)
-    
-    # Get test predictions and scores
     test_targets = test_metrics['targets']
     test_scores = test_metrics['scores']
-    
-    # Find optimal threshold that maximizes F2-score
-    optimal_threshold = 0.5
-    best_f2 = 0
-    
-    for threshold in np.linspace(0.1, 0.9, 81):
-        preds = (test_scores >= threshold).astype(int)
-        if len(set(test_targets)) > 1:
-            f2 = fbeta_score(test_targets, preds, beta=2, zero_division=0)
-            if f2 > best_f2:
-                best_f2 = f2
-                optimal_threshold = threshold
-    
-    # Use optimal threshold for all metrics and confusion matrix
+
+    # Use the validation threshold for all test metrics and the confusion matrix
     test_preds = (test_scores >= optimal_threshold).astype(int)
     cm = confusion_matrix(test_targets, test_preds)
     
@@ -835,7 +829,7 @@ def main():
     
     logger.info(
         f"\n{'='*80}\n"
-        f"FINAL TEST SET RESULTS (Optimal Threshold: {optimal_threshold:.3f}):\n"
+        f"FINAL TEST SET RESULTS (threshold {optimal_threshold:.3f}, chosen on validation):\n"
         f"  Recall (Lens Detection Rate): {recall:.4f}\n"
         f"  Specificity (Non-Lens Elimination): {specificity:.4f}\n"
         f"  Precision: {precision:.4f}\n"
@@ -862,6 +856,7 @@ def main():
     # Save test results (using optimal threshold)
     test_results = {
         'optimal_threshold': float(optimal_threshold),
+        'threshold_selected_on': 'validation',
         'recall': float(recall),
         'specificity': float(specificity),
         'precision': float(precision),
@@ -915,9 +910,6 @@ def main():
     
     # Save validation predictions CSV (using same best model, for comparison with test)
     logger.info("Saving validation predictions to CSV...")
-    val_metrics_final = validate_epoch(model, val_loader, criterion, device)
-    val_targets = val_metrics_final['targets']
-    val_scores = val_metrics_final['scores']
     val_preds = (val_scores >= optimal_threshold).astype(int)
     
     val_predictions_df = pd.DataFrame({
