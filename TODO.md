@@ -25,8 +25,9 @@ Last updated 2026-11-16 (after [SMesForoush/LensDetection#7](https://github.com/
 5. **Train each architecture with 3–5 seeds** and report mean ± sd, plus bootstrap 95 % intervals over test images.
 6. **Do a structured error analysis** of false positives and false negatives on the real set.
 
-**What the code does today:** it trains on *real* cutouts split by sky region (real lenses in training) and fine-tunes
-published weights. PRISM is only an optional extra. Most items below exist to close that gap.
+**What the code does today:** it trains, validates and tests on PRISM only by default (`--train_data prism`, C6), but
+still fine-tunes published weights with model-specific inputs and recipes. `--train_data real|both` keeps the old
+real-data split by sky region. Most items below exist to close the remaining gap.
 
 ### Data
 
@@ -42,7 +43,7 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | File | Role |
 |---|---|
-| `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). Real data is split by region; PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7). |
+| `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every real image, unsplit, for C8. |
 | `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
@@ -123,9 +124,11 @@ C14, C15, C16, C17 can be done in parallel at any time.
 ## Code changes (`LensDetection` repo)
 
 ### C6. PRISM-only training mode
-- **Status:** partly done. The grouped split shipped in #7: PRISM is split 70/15/15 by `base_lens_id` (56/12/12
-  systems), and non-lenses are split within each `nonlens_mode` under `--split_seed`. **Still open:** a mode where
-  training, validation and test are PRISM only.
+- **Status:** done (PR_LINK). The grouped split shipped in #7. `--train_data {prism,real,both}` (default
+  `prism`, logged as a warning when not given; `--include_prism` = `both`) is in `add_data_arguments`; `--prism_dir`
+  now defaults to the Roihu PRISM path. `system_info.json` and `test_results.json` record `train_data` and
+  `split_seed`, and `test_results.json` adds `split_sizes`. `slurm/finetune.sh` takes `TRAIN_DATA` (default `prism`).
+  The full PRISM-only LensNet run logged 2,801/600/599 (1,400/300/300 lenses, 56/12/12 systems) and no real images.
 - **Depends on:** D1
 - **Files:** `datasets/sources.py`, `pipelines/common.py`, `train.py`, `slurm/finetune.sh`, `README.md`
 - **Now:** `collect_from_args` always loads the real manifest, and `split_samples` always puts real images in
@@ -158,6 +161,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **To do:**
   1. Input: a run directory (or `best_model.pth`), plus the data arguments (`--cosmos_root` and the `--real_*_dir`
      overrides).
+     Get the real images with `datasets.sources.all_real_samples(args)` (unsplit, no `--max_samples_per_class`).
   2. Load the model and its stored transform with `pipelines/load.py::load_finetuned`. LensNet from `train.py` has a
      different checkpoint format, so either handle both or do C10 first.
   3. Read the frozen threshold from the checkpoint. **There must be no threshold argument**, and the script must not

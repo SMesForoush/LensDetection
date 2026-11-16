@@ -6,7 +6,8 @@ Key Features:
 - Dynamic data loading: memory-efficient on-demand loading
 - No augmentation: preserves original astronomical data integrity
 - No normalization: uses raw pixel values for training
-- Real-data split by sky region: train/validation/test regions (datasets/sources.py); optional PRISM data 70-20-10
+- Data mode --train_data prism (default) | real | both (datasets/sources.py): PRISM split 70/15/15 grouped by
+  base lens system, real data split by sky region
 - Recall-focused: optimized for maximizing lens detection (high recall)
 - Comprehensive metrics: recall, precision, F1, F2, specificity, NPV
 - Early stopping: based on validation F2-score with min specificity constraint to prevent overfitting
@@ -41,12 +42,15 @@ Quality Assurance:
 - Includes: corruption percentages, inpainting counts, rejection reasons
 - Enables reproducibility and validation of data preprocessing
 
-Usage on Roihu (real COWLS lenses, look-alikes and hand-checked non-lenses; see datasets/sources.py):
-python train.py --output_dir /scratch/ituomine/COSMOS-WEB-LENS/LensDetection/lensnet_real --gpu
+Usage on Roihu, PRISM simulations only (the default; see datasets/sources.py):
+python train.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
+  --output_dir /scratch/ituomine/COSMOS-WEB-LENS/LensDetection/lensnet_prism --gpu
+
+Real COWLS lenses, look-alikes and hand-checked non-lenses, split by sky region:
+python train.py --train_data real --output_dir ... --gpu
 
 Real data plus the PRISM simulations:
-python train.py --include_prism --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
-  --output_dir ... --gpu
+python train.py --train_data both --prism_dir ... --output_dir ... --gpu
 
 References:
 - Inpainting approach inspired by Bertalmio et al. (2000) "Image Inpainting"
@@ -90,9 +94,9 @@ import random
 
 # internal imports
 from datasets.base import LensDatasetMemoryEfficient
-from datasets.sources import add_data_arguments, collect_from_args, split_samples
+from datasets.sources import add_data_arguments, collect_from_args, resolve_train_data, split_samples
 from models.lensnet import LensNet
-from pipelines.common import best_f2_threshold, select_device
+from pipelines.common import best_f2_threshold, select_device, split_sizes
 # --------------------------------------------------------------------------------------
 # Reproducibility
 # --------------------------------------------------------------------------------------
@@ -512,7 +516,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Save all arguments and system info
+    data_info = {'train_data': resolve_train_data(args, logger), 'split_seed': args.split_seed}
     system_info = {
+        **data_info,
         'arguments': vars(args),
         'python_version': sys.version,
         'pytorch_version': torch.__version__,
@@ -526,8 +532,8 @@ def main():
     logger.info("Starting Research-Grade ML Pipeline")
     device = select_device(args.gpu, logger)  # CUDA, else Apple Silicon GPU (MPS), else CPU
     
-    # --- Data Collection: real images, plus the PRISM simulations with --include_prism ---
-    logger.info(f"Collecting file paths (include_prism={args.include_prism})...")
+    # --- Data Collection: the sources selected by --train_data (PRISM, real or both) ---
+    logger.info(f"Collecting file paths (--train_data {args.train_data})...")
     samples = collect_from_args(args, logger)
     all_labels = [s.label for s in samples]
     logger.info("Pre-filtering disabled - corrupted files will be handled at runtime via inpainting")
@@ -545,7 +551,7 @@ def main():
         logger.warning(f"⚠ SEVERE CLASS IMBALANCE ({imbalance_ratio:.1f}:1) - May cause degenerate models!")
         logger.warning("  Consider: (1) Collect more lens data, (2) Use lower lens_weight_multiplier (1.0-1.1)")
     
-    # --- Train/Val/Test split: real images by sky region, PRISM 70/15/15 grouped by base lens system (includes the data leak check) ---
+    # --- Train/Val/Test split: PRISM 70/15/15 grouped by base lens system, real images by sky region grouped by base lens system (includes the data leak check) ---
     logger.info("Data split:")
     splits = split_samples(samples, args.val_region, args.test_region, args.split_seed, logger)
     train_paths, train_labels, train_sources = splits["train"]
@@ -855,6 +861,8 @@ def main():
     
     # Save test results (using optimal threshold)
     test_results = {
+        **data_info,
+        'split_sizes': split_sizes(splits),
         'optimal_threshold': float(optimal_threshold),
         'threshold_selected_on': 'validation',
         'recall': float(recall),

@@ -5,7 +5,21 @@
 `train.py` trains LensNet from scratch, and `pipelines/` fine-tunes pretrained models. Both read the same
 data sources through `datasets/sources.py` and use the same split.
 
-**Real COSMOS-Web DR1 images (the default).** `datasets/cosmos_real_manifest.csv` lists them, with their sky region:
+**Data mode.** `--train_data` sets which images train, validate and test the model:
+
+| `--train_data` | Train / validation / test | Real images |
+|---|---|---|
+| `prism` (default) | PRISM simulations only, split 70/15/15 by lens system | not read; kept for the external evaluation |
+| `real` | real images, split by sky region | all three splits |
+| `both` | real + PRISM, each split its own way | all three splits |
+
+The default used to be real data. Old command lines that relied on it now train on PRISM, so pass
+`--train_data real` to keep them as they were; the log warns when `--train_data` is not given. `--include_prism` is
+an old name for `--train_data both`. `system_info.json` and `test_results.json` record `train_data` and
+`split_seed`, and `test_results.json` also has `split_sizes` (images, lenses and sources per split).
+`datasets.sources.all_real_samples(args)` returns every real image, unsplit, for the evaluation on real data.
+
+**Real COSMOS-Web DR1 images.** `datasets/cosmos_real_manifest.csv` lists them, with their sky region:
 
 | Source | Images | Label |
 |---|---|---|
@@ -24,24 +38,26 @@ The manifest is built by `scripts/build_real_manifest.py` from the mock-lens-mod
 the three lens cutouts trimmed at a tile edge (COSJ100024+021749, COSJ095953+022159, COSJ100101+021819) and the
 four AnomalyMatch lens candidates that were among the non-lenses (104781, 628424, 87284, 82656).
 
-**Split by sky region.** DR1 is divided into 5 sky regions. Region `--test_region` (default 0) is the test set,
+**Split by sky region** (`--train_data real|both`). DR1 is divided into 5 sky regions. Region `--test_region` (default 0) is the test set,
 `--val_region` (default 4) the validation set, and the other three regions are training data. Training-region
 images within 13" of the validation or test region are dropped, so no training cutout shares pixels with a
 validation or test cutout.
 
-**PRISM simulations (optional).** `--include_prism --prism_dir DIR` adds `cosmos_lens_*.npy` (`prism_lens`, label 1)
+**PRISM simulations** (`--train_data prism|both`). `--prism_dir DIR` (default
+`/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5`) holds `cosmos_lens_*.npy` (`prism_lens`, label 1)
 and `cosmos_nonlens_*.npy` (`prism_nonlens`, label 0). They have no sky position and are split 70/15/15, grouped by
 `base_lens_id` from `DIR/cosmos_lens_training_catalog.csv`: the 25 variations of one simulated lens system always land
 in the same split. Non-lenses are split 70/15/15 within each `nonlens_mode`. The split depends only on `--split_seed`
-(default 42), not `--seed`, so repeated runs see the same split. Validation and test then hold both real and PRISM
-images. `--mock_data_dir` is accepted as
-another name for `--prism_dir`.
+(default 42), not `--seed`, so repeated runs see the same split: 2,801 / 600 / 599 images (1,400 / 300 / 300
+lenses from 56 / 12 / 12 lens systems) at split seed 42. `--val_region` and `--test_region` are unused with
+`--train_data prism`. `--mock_data_dir` is accepted as another name for `--prism_dir`.
 
 ```bash
-python train.py --output_dir results/lensnet_real --gpu
-python train.py --include_prism --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
-    --output_dir results/lensnet_real_prism --gpu
-INCLUDE_PRISM=1 sbatch slurm/finetune.sh       # fine-tuning on real + PRISM data
+python train.py --output_dir results/lensnet_prism --gpu                      # PRISM only (default)
+python train.py --train_data real --output_dir results/lensnet_real --gpu
+python train.py --train_data both --output_dir results/lensnet_real_prism --gpu
+sbatch slurm/finetune.sh                       # fine-tuning on PRISM only
+TRAIN_DATA=real sbatch slurm/finetune.sh       # fine-tuning on real data (TRAIN_DATA=both: real + PRISM)
 ```
 
 **Running off Roihu.** `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
@@ -55,7 +71,9 @@ python3 scripts/pack_for_laptop.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS
     --weights_dir weights --out /scratch/$USER/cosmos_laptop_data.zip
 # on the laptop
 rsync -P roihu:/scratch/$USER/cosmos_laptop_data.zip . && unzip cosmos_laptop_data.zip -d cosmos_data
-python train.py --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses --output_dir results/local --gpu
+python train.py --train_data real --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses \
+    --output_dir results/local --gpu
+python train.py --prism_dir cosmos_data/prism --output_dir results/local_prism --gpu
 ```
 
 `--gpu` uses an NVIDIA GPU (CUDA) when there is one, and otherwise the Apple Silicon GPU (MPS) on a Mac, in
@@ -91,7 +109,7 @@ sbatch slurm/finetune.sh deeplens
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
-arguments (`--cosmos_root`, `--val_region`, `--test_region`, `--include_prism`, `--prism_dir`,
+arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--prism_dir`,
 `--max_samples_per_class`, ...), plus:
 
 - `--bands`: which base-data channels feed the model's input slots. The defaults assume the four base

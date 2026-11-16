@@ -16,8 +16,9 @@ lens cutouts are in mock-lens-modeling/real_cowls_lenses already. Zip layout:
     weights/...                                     pretrained weights (--weights_dir)
 
 On the laptop, after `unzip cosmos_laptop_data.zip -d <data>`:
-    python train.py --cosmos_root <data> --real_lens_dir <mock-lens-modeling>/real_cowls_lenses --output_dir ...
-(drop --real_lens_dir if the lenses were packed; add --include_prism --prism_dir <data>/prism for PRISM).
+    python train.py --train_data real --cosmos_root <data> --real_lens_dir <mock-lens-modeling>/real_cowls_lenses \
+        --output_dir ...
+(drop --real_lens_dir if the lenses were packed; use --train_data prism|both --prism_dir <data>/prism for PRISM).
 The files are float32 noise-dominated images that barely compress, so they are stored uncompressed unless --compress.
 """
 import argparse

@@ -1,8 +1,8 @@
 """Shared fine-tuning machinery for the pretrained lens-finder pipelines.
 
 Mirrors train.py so results are directly comparable with LensNet:
-- same data sources and split (datasets/sources.py): real images by sky region, optional PRISM data 70/15/15
-  grouped by base lens system
+- same data sources and split (datasets/sources.py): --train_data prism (default) | real | both; PRISM 70/15/15
+  grouped by base lens system, real images by sky region
 - LensDatasetMemoryEfficient (inpainting + outlier clipping) as the base dataset
 - class-weighted cross-entropy with label smoothing, AdamW, AMP, gradient clipping
 - model selection on validation F2 subject to a minimum specificity, early stopping
@@ -37,7 +37,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.base import LensDatasetMemoryEfficient  # noqa: E402
-from datasets.sources import add_data_arguments, collect_from_args, split_samples  # noqa: E402
+from datasets.sources import add_data_arguments, collect_from_args, resolve_train_data, split_samples  # noqa: E402
 from datasets.transforms import TransformedDataset  # noqa: E402
 
 
@@ -307,6 +307,15 @@ def save_predictions(path, paths, origins, y_true, y_score, threshold):
     return df
 
 
+def split_sizes(splits):
+    """{split: {'n', 'lenses', 'nonlenses', 'sources': {source: n}}} for the results files."""
+    out = {}
+    for name, (paths, labels, sources) in splits.items():
+        out[name] = {"n": len(paths), "lenses": int(sum(labels)), "nonlenses": int(len(labels) - sum(labels)),
+                     "sources": {k: int(v) for k, v in pd.Series(sources, dtype=object).value_counts().items()}}
+    return out
+
+
 # --------------------------------------------------------------------------------------
 # Full pipeline
 # --------------------------------------------------------------------------------------
@@ -324,14 +333,15 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
     device = select_device(args.gpu, logger)
     use_amp = bool(args.mixed_precision and device.type == "cuda")
     eval_transform = train_transform.without_augmentation()
+    data_info = {"train_data": resolve_train_data(args, logger), "split_seed": args.split_seed}
 
     with open(output_dir / "system_info.json", "w") as f:
         json.dump({"model_name": model_name, "model_config": model_config, "transform": eval_transform.config(),
-                   "arguments": vars(args), "python_version": sys.version, "pytorch_version": torch.__version__,
+                   **data_info, "arguments": vars(args), "python_version": sys.version, "pytorch_version": torch.__version__,
                    "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
                    **(extra_info or {})}, f, indent=2, default=str)
 
-    logger.info(f"Collecting files (include_prism={args.include_prism})...")
+    logger.info(f"Collecting files (--train_data {args.train_data})...")
     samples = collect_from_args(args, logger)
     splits = split_samples(samples, args.val_region, args.test_region, args.split_seed, logger)
     train_loader = make_loader(*splits["train"][:2], train_transform, args, shuffle=True)
@@ -412,7 +422,8 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
     _, y_val, s_val = predict(model, val_loader, criterion, device, use_amp)
     threshold = best_f2_threshold(y_val, s_val)
     _, y_test, s_test = predict(model, test_loader, criterion, device, use_amp)
-    results = {"best_epoch": int(ckpt["epoch"]), "threshold_selected_on": "validation",
+    results = {**data_info, "split_sizes": split_sizes(splits),
+               "best_epoch": int(ckpt["epoch"]), "threshold_selected_on": "validation",
                "validation": binary_metrics(y_val, s_val, threshold),
                "test": binary_metrics(y_test, s_test, threshold),
                "test_at_0.5": binary_metrics(y_test, s_test, 0.5)}

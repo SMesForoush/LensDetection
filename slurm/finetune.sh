@@ -20,12 +20,16 @@ export HF_HUB_OFFLINE=1   # use the weights downloaded on the login node
 
 MODEL="deeplens"
 SCRATCH_DIR="/scratch/ituomine/COSMOS-WEB-LENS/LensDetection"
-# Real images (COWLS lenses, look-alikes, hand-checked non-lenses) are read from the mock-lens-modeling project,
-# paths in datasets/cosmos_real_manifest.csv. Add the PRISM simulations with  INCLUDE_PRISM=1 sbatch slurm/finetune.sh
+# TRAIN_DATA picks the data that trains, validates and tests the model (datasets/sources.py):
+#   prism (default)  PRISM simulations only; the real images are kept for the external evaluation
+#   real             real images (COWLS lenses, look-alikes, hand-checked non-lenses), split by sky region
+#   both             real + PRISM
+# e.g.  TRAIN_DATA=real sbatch slurm/finetune.sh   (INCLUDE_PRISM=1 is the old spelling of TRAIN_DATA=both)
+# Real images are read from the mock-lens-modeling project, paths in datasets/cosmos_real_manifest.csv.
 COSMOS_ROOT="/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling"
 PRISM_DIR="/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5"
-PRISM_ARGS=()
-[ "${INCLUDE_PRISM:-0}" = 1 ] && PRISM_ARGS=(--include_prism --prism_dir "$PRISM_DIR")
+if [ "${INCLUDE_PRISM:-0}" = 1 ] && [ -z "${TRAIN_DATA:-}" ]; then TRAIN_DATA=both; fi
+TRAIN_DATA="${TRAIN_DATA:-prism}"
 WEIGHTS_DIR="${WEIGHTS_DIR:-weights}"
 OUTPUT_DIR="$SCRATCH_DIR/finetune_${MODEL}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR" logs
@@ -43,12 +47,13 @@ case "$MODEL" in
         echo "Unknown model '$MODEL'"; exit 1 ;;
 esac
 
-echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: fine-tuning $MODEL (include_prism=${INCLUDE_PRISM:-0}) -> $OUTPUT_DIR"
+echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: fine-tuning $MODEL (train_data=$TRAIN_DATA) -> $OUTPUT_DIR"
 nvidia-smi
 
 srun python3 -m "pipelines.$MODEL" \
+    --train_data "$TRAIN_DATA" \
     --cosmos_root "$COSMOS_ROOT" \
-    "${PRISM_ARGS[@]}" \
+    --prism_dir "$PRISM_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --max_samples_per_class 30000 \
     --lens_weight_multiplier 1.2 \
