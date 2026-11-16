@@ -30,8 +30,11 @@ images within 13" of the validation or test region are dropped, so no training c
 validation or test cutout.
 
 **PRISM simulations (optional).** `--include_prism --prism_dir DIR` adds `cosmos_lens_*.npy` (`prism_lens`, label 1)
-and `cosmos_nonlens_*.npy` (`prism_nonlens`, label 0). They have no sky position and are split 70/20/10 at random
-(stratified), so validation and test then hold both real and PRISM images. `--mock_data_dir` is accepted as
+and `cosmos_nonlens_*.npy` (`prism_nonlens`, label 0). They have no sky position and are split 70/15/15, grouped by
+`base_lens_id` from `DIR/cosmos_lens_training_catalog.csv`: the 25 variations of one simulated lens system always land
+in the same split. Non-lenses are split 70/15/15 within each `nonlens_mode`. The split depends only on `--split_seed`
+(default 42), not `--seed`, so repeated runs see the same split. Validation and test then hold both real and PRISM
+images. `--mock_data_dir` is accepted as
 another name for `--prism_dir`.
 
 ```bash
