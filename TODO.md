@@ -53,9 +53,10 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. `ModelInputTransform.thesis_default()` is the shared D4 input (`--input_preset thesis`, default; C9). |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
-| `pipelines/deeplens.py`, `teglie.py`, `gravit.py` | One script per model, built on `run_finetuning`. |
+| `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py` | One script per model, built on `run_finetuning`. LensNet trains from scratch with the D4 input (C10). |
 | `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
-| `train.py` | LensNet (baseline). A separate, older training loop that does **not** use `run_finetuning`. |
+| `train.py` | **Legacy** LensNet loop that does not use `run_finetuning` (kept to reproduce the pilot runs). Use `pipelines/lensnet.py`. |
+| `scripts/gradcam.py` | Grad-CAM of the lens score for rows of a predictions CSV, from any checkpoint (moved out of `train.py` in C10, for E21). |
 | `models/*.py` | Architectures: `lensnet.py` (1,753,570 params), `deeplens.py` (3,557,281 at 300 px), `teglie.py` (3,193,889), `gravit.py`. |
 | `slurm/finetune.sh` | Roihu job: 1× GH200, `module load python-pytorch/2.13`. |
 | `../Master-thesis/sections/*.tex` | Thesis text (`data.tex`, `methodology.tex`, `literature.tex`, `introduction.tex`). |
@@ -201,8 +202,9 @@ C14, C15, C16, C17 can be done in parallel at any time.
   DeepLens and TEGLIE still load pretrained weights until C11 makes them optional.
 - **Depends on:** D4
 - **Files:** `datasets/transforms.py`, `pipelines/*.py`, `train.py`
-- **Now:** each pipeline builds its own `ModelInputTransform` with a different scaling, size and band order. `train.py`
-  uses no transform (raw MJy/sr; its pilot run collapsed and predicted every image as a lens).
+- **Now:** each pipeline builds its own `ModelInputTransform` with a different scaling, size and band order.
+  `pipelines/lensnet.py` (C10) already uses the D4 transform as its own default; the legacy `train.py` uses no transform
+  (raw MJy/sr; its pilot run collapsed and predicted every image as a lens).
 - **To do:** add a single default (for example `ModelInputTransform.thesis_default()`, or defaults in
   `build_arg_parser`) set to the D4 choice, and use it in every from-scratch run. Keep the model-specific settings
   (ZScale, 2,3,1,0 order) reachable only behind an explicit flag for the pretrained side experiment. Record the transform
@@ -210,7 +212,16 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Done when:** the `system_info.json` `transform` entries of all three architectures are identical.
 
 ### C10. LensNet in the shared runner, with augmentation
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#14](https://github.com/SMesForoush/LensDetection/pull/14)). `pipelines/lensnet.py` trains LensNet from random
+  initialisation through `run_finetuning` (no per-model recipe overrides; `--augment` turns on D4 flips/rotations) with
+  the D4 input: bands 0,1,2,3, 300 px, `unit_asinh` 0.5–99.5 %, softening 0.1 (`--scaling none` = raw MJy/sr, as
+  `train.py`). `load.py` already knew `"lensnet"`, so pipeline checkpoints reload unchanged. `train.py` stays as legacy
+  (README and a log warning say so). Grad-CAM moved to `scripts/gradcam.py`, which reads a predictions CSV and any
+  checkpoint; its LensNet default layer is now `pool5`, because `conv5` (before BN/ReLU) gave all-zero maps.
+  `slurm/finetune.sh` takes `MODEL=lensnet`.
+  Smoke run (`--augment --max_samples_per_class 100 --epochs 2`, MPS): about 6 s per epoch after the first, all
+  standard outputs written, `load_finetuned` reproduces the saved test scores (max diff 4e-8), and
+  `evaluate_real` scores 5,031 real images (277 + 4,754).
 - **Depends on:** D2 (if the baseline changes, port that model instead)
 - **Files:** new `pipelines/lensnet.py`, `pipelines/load.py`, and possibly the retirement of `train.py`
 - **Now:** `train.py` is a separate loop with its own early stopping, metrics, cosine warm restarts and no augmentation.
