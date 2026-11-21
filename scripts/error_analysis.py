@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Structured error analysis of the real-data evaluation (TODO C17, thesis section "Structured error analysis").
 
-    python scripts/error_analysis.py results --output_dir results/error_analysis \
-        --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses      # on the laptop
+    python scripts/error_analysis.py results --output_dir results/error_analysis   # data paths default to the laptop
 
 Input: run directories scored by pipelines/evaluate_real.py, i.e. holding real_predictions.csv and real_results.json.
 Each positional argument is such a directory, or a folder searched recursively for them (e.g. results/ with the
