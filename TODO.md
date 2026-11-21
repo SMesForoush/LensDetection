@@ -233,7 +233,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
   weights file and logs about 3.56 M trainable parameters.
 
 ### C12. EfficientNet-B0 pipeline
-- **Status:** done (PR_LINK). `pipelines/efficientnet.py` + `models/efficientnet.py`:
+- **Status:** done ([SMesForoush/LensDetection#16](https://github.com/SMesForoush/LensDetection/pull/16)). `pipelines/efficientnet.py` + `models/efficientnet.py`:
   timm `efficientnet_b0`, `pretrained=False`, `in_chans=4`, 2 logits, 4,010,398 parameters; `--dropout` and
   `--drop_path_rate` default to the B0 paper's 0.2. Only `--input_preset thesis` (native is refused); no per-model
   `set_defaults`, so C13 sets its recipe in `build_arg_parser`. `system_info.json` records `"pretrained": null`.
