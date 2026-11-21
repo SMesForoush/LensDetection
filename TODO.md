@@ -327,7 +327,7 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 - **Done when:** runs log `dropped N corrupted files` per source, and no all-zero tensors reach the model.
 
 ### C15. Missing metrics: FPR, bootstrap intervals, curves
-- **Status:** done (branch `claude/c15-todo-51354a`, PR link to follow). `binary_metrics` returns `fpr` and
+- **Status:** done ([SMesForoush/LensDetection#20](https://github.com/SMesForoush/LensDetection/pull/20)). `binary_metrics` returns `fpr` and
   `prevalence` (so every metrics block has them; `evaluate_real.with_baseline` no longer computes its own).
   `bootstrap_ci(y_true, y_score, threshold, n=2000, seed=0)` in `pipelines/common.py` resamples lenses and non-lenses
   separately at the fixed threshold and returns `{metric: [low, high]}` (2.5/97.5 percentiles) for recall,
