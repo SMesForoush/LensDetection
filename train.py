@@ -4,8 +4,10 @@ COSMOS-Web Lens Detection ML Pipeline - Research Grade Version
 
 Key Features:
 - Dynamic data loading: memory-efficient on-demand loading
-- No augmentation: preserves original astronomical data integrity
-- No normalization: uses raw pixel values for training
+- No augmentation (C10 moves LensNet to the shared runner, which has it)
+- Input --input_preset thesis (default): the shared thesis transform of every architecture, 4 bands at 300x300 with a
+  per-band 0.5-99.5 percentile asinh stretch (datasets/transforms.py::THESIS_TRANSFORM). --input_preset native feeds
+  the raw MJy/sr pixel values, as the earlier pilot runs did
 - Data mode --train_data prism (default) | real | both (datasets/sources.py): PRISM split 70/15/15 grouped by
   base lens system, real data split by sky region
 - Recall-focused: optimized for maximizing lens detection (high recall)
@@ -96,6 +98,7 @@ import random
 from datasets.base import LensDatasetMemoryEfficient
 from datasets.quality import dropped_counts, save_report
 from datasets.sources import add_data_arguments, collect_from_args, resolve_train_data, split_samples
+from datasets.transforms import INPUT_PRESETS, ModelInputTransform, TransformedDataset
 from models.lensnet import LensNet
 from pipelines.common import THRESHOLD_RULE, best_f2_threshold, select_device, split_sizes
 from pipelines.load import LENSNET_RAW_TRANSFORM
@@ -472,6 +475,9 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="COSMOS-Web Lens Detection ML Pipeline - Advanced Version")
     add_data_arguments(parser)
     parser.add_argument("--output_dir", required=True, help="Output directory for results")
+    parser.add_argument("--input_preset", choices=INPUT_PRESETS, default="thesis",
+                        help="thesis: the input transform shared by every architecture (4 bands, 300x300, per-band "
+                             "unit_asinh); native: raw MJy/sr pixel values, as in the pilot runs")
     parser.add_argument("--batch_size", type=int, default=64, help="Batch size (increased from 32 to 64 for faster training - adjust based on GPU memory)")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
     parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate")
@@ -519,7 +525,13 @@ def main():
     
     # Save all arguments and system info
     data_info = {'train_data': resolve_train_data(args, logger), 'split_seed': args.split_seed}
+    input_transform = ModelInputTransform.thesis_default() if args.input_preset == 'thesis' \
+        else ModelInputTransform(**LENSNET_RAW_TRANSFORM)
     system_info = {
+        'model_name': 'lensnet',
+        'model_config': {'dropout': args.dropout, 'in_channels': 4},
+        'input_preset': args.input_preset,
+        'transform': input_transform.config(),
         **data_info,
         'arguments': vars(args),
         'python_version': sys.version,
@@ -562,11 +574,12 @@ def main():
     test_paths, test_labels, test_sources = splits["test"]
     logger.info("✓ Data leak check passed - no overlap between splits")
     
-    # --- Datasets: base dataset (4 bands, inpainting + outlier clipping, no normalization) ---
+    # --- Datasets: base dataset (4 bands, inpainting + outlier clipping) + the --input_preset transform ---
     logger.info("Creating LensDatasetMemoryEfficient datasets (4 x 300 x 300)...")
-    train_dataset = LensDatasetMemoryEfficient(train_paths, train_labels, track_statistics=False)
-    val_dataset = LensDatasetMemoryEfficient(val_paths, val_labels, track_statistics=False)
-    test_dataset = LensDatasetMemoryEfficient(test_paths, test_labels, track_statistics=False)
+    logger.info(f"Input preset '{args.input_preset}': {input_transform.config()}")
+    train_dataset, val_dataset, test_dataset = (
+        TransformedDataset(LensDatasetMemoryEfficient(paths, labels, track_statistics=False), input_transform)
+        for paths, labels in ((train_paths, train_labels), (val_paths, val_labels), (test_paths, test_labels)))
     logger.info("⚡ Statistics tracking disabled for training")
     
     # Log dataset statistics for reproducibility
@@ -822,7 +835,7 @@ def main():
     best_checkpoint.update({
         'model_name': 'lensnet',
         'model_config': {'dropout': args.dropout, 'in_channels': 4},
-        'transform': LENSNET_RAW_TRANSFORM,
+        'transform': input_transform.config(),
         'model_state_dict': unwrapped.state_dict(),
         'threshold': float(optimal_threshold),
         'threshold_rule': THRESHOLD_RULE,

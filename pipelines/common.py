@@ -39,7 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from datasets.base import LensDatasetMemoryEfficient  # noqa: E402
 from datasets.quality import dropped_counts, save_report  # noqa: E402
 from datasets.sources import add_data_arguments, collect_from_args, resolve_train_data, split_samples  # noqa: E402
-from datasets.transforms import TransformedDataset  # noqa: E402
+from datasets.transforms import (INPUT_PRESETS, THESIS_TRANSFORM, ModelInputTransform, TransformedDataset,  # noqa: E402
+                                 parse_bands)
 
 
 # --------------------------------------------------------------------------------------
@@ -49,9 +50,16 @@ def build_arg_parser(description):
     p = argparse.ArgumentParser(description=description, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     d = add_data_arguments(p.add_argument_group("data (same sources and split as train.py)"))
     d.add_argument("--output_dir", required=True, help="Output directory for checkpoints and results")
-    d.add_argument("--bands", help="Comma-separated base-data channel indices fed to the model's input slots")
+    d.add_argument("--input_preset", choices=INPUT_PRESETS, default="thesis",
+                   help="thesis: the one shared input of the thesis experiment for every model (4 bands 0,1,2,3, "
+                        "300x300, per-band unit_asinh; datasets/transforms.py::THESIS_TRANSFORM). native: the "
+                        "model's own published input (band order, size, scaling), for the pretrained side "
+                        "experiment. --bands, --image_size, --resize_mode and the model's scaling options only "
+                        "apply with native")
+    d.add_argument("--bands", help="Comma-separated base-data channel indices fed to the model's input slots "
+                                   "(--input_preset native only; default: the model's published order)")
     d.add_argument("--resize_mode", choices=["resize", "center_crop"], default="resize",
-                   help="How the 300x300 cutouts are brought to the model's input size")
+                   help="How the 300x300 cutouts are brought to the model's input size (--input_preset native only)")
     d.add_argument("--augment", action="store_true", help="Random flips + 90 degree rotations on the training set")
 
     t = p.add_argument_group("training")
@@ -135,6 +143,33 @@ def select_device(use_gpu, logger=None):
 # --------------------------------------------------------------------------------------
 # Data
 # --------------------------------------------------------------------------------------
+def build_input_transform(args, native_config, logger):
+    """The training-set ModelInputTransform chosen by --input_preset (evaluation drops the augmentation).
+
+    thesis: ModelInputTransform.thesis_default(), identical for every architecture. --bands and --image_size may be
+        left out or set to the thesis values; anything else is an error, so that a run cannot silently mix presets.
+    native: `native_config`, the model's published input convention (pretrained side experiment).
+    """
+    if args.input_preset == "native":
+        transform = ModelInputTransform(augment=args.augment, **native_config)
+    elif args.input_preset == "thesis":
+        conflicts = []
+        if args.bands is not None and parse_bands(args.bands) != THESIS_TRANSFORM["bands"]:
+            conflicts.append(f"--bands {args.bands}")
+        if getattr(args, "image_size", None) not in (None, THESIS_TRANSFORM["image_size"]):
+            conflicts.append(f"--image_size {args.image_size}")
+        if args.resize_mode != THESIS_TRANSFORM["resize_mode"]:
+            conflicts.append(f"--resize_mode {args.resize_mode}")
+        if conflicts:
+            raise SystemExit(f"{', '.join(conflicts)}: only valid with --input_preset native; the thesis preset fixes "
+                             f"the input to {THESIS_TRANSFORM}")
+        transform = ModelInputTransform.thesis_default(augment=args.augment)
+    else:
+        raise ValueError(f"Unknown input preset '{args.input_preset}'")
+    logger.info(f"Input preset '{args.input_preset}': {transform.config()}")
+    return transform
+
+
 def make_loader(paths, labels, transform, args, shuffle):
     base = LensDatasetMemoryEfficient(paths, labels, track_statistics=False)
     kwargs = dict(batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=torch.cuda.is_available(),
@@ -343,8 +378,8 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
     data_info = {"train_data": resolve_train_data(args, logger), "split_seed": args.split_seed}
 
     with open(output_dir / "system_info.json", "w") as f:
-        json.dump({"model_name": model_name, "model_config": model_config, "transform": eval_transform.config(),
-                   **data_info, "arguments": vars(args), "python_version": sys.version, "pytorch_version": torch.__version__,
+        json.dump({"model_name": model_name, "model_config": model_config, "input_preset": args.input_preset,
+                   "transform": eval_transform.config(), **data_info, "arguments": vars(args), "python_version": sys.version, "pytorch_version": torch.__version__,
                    "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
                    **(extra_info or {})}, f, indent=2, default=str)
 

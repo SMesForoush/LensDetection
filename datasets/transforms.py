@@ -1,8 +1,15 @@
-"""Model-specific input transforms applied on top of LensDatasetMemoryEfficient.
+"""Input transforms applied on top of LensDatasetMemoryEfficient.
 
-The base dataset yields raw (4, 300, 300) float tensors. Each pretrained model expects a different
-input convention, so each fine-tuning pipeline wraps the base dataset with one of these transforms:
+The base dataset yields raw (4, 300, 300) float tensors in MJy/sr. Every from-scratch run in the thesis uses one
+shared transform (`--input_preset thesis`, the default; decision D4 in TODO.md):
 
+    thesis   : 4 bands in natural order (F115W, F150W, F277W, F444W) -> 300x300 (native, no resampling)
+               -> per band, per image: 0.5-99.5 percentile clip to [0, 1] -> asinh stretch (softening 0.1)
+
+Each pretrained model expects its own published input convention, which `--input_preset native` restores for the
+pretrained side experiment:
+
+    LensNet  : raw MJy/sr at 300x300 (the old train.py input)
     GraViT   : 3 bands -> 224x224 -> per-band [0, 1] stretch -> ImageNet mean/std
     TEGLIE   : 4 bands (r, i, g, u slots) -> 101x101 -> clipped & scaled to [-100, 100]
     DeepLens : 4 bands (R, I, G, U slots) -> 101x101 -> per-band astropy ZScale to [0, 1]
@@ -17,6 +24,12 @@ from torch.utils.data import Dataset
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
+
+# The one input transform shared by every architecture in the thesis experiment (decision D4). 300 px keeps the native
+# 0.03"/px sampling, so a median 0.53" Einstein radius spans about 18 px instead of 6 px at 101 px.
+THESIS_TRANSFORM = dict(bands=(0, 1, 2, 3), image_size=300, resize_mode="resize", scaling="unit_asinh",
+                        imagenet_norm=False, low_pct=0.5, high_pct=99.5, asinh_softening=0.1)
+INPUT_PRESETS = ("thesis", "native")
 
 
 def parse_bands(text):
@@ -93,6 +106,11 @@ class ModelInputTransform:
         self.imagenet_norm = imagenet_norm
         self.augment = augment
         self.scaling_kwargs = scaling_kwargs
+
+    @classmethod
+    def thesis_default(cls, augment=False):
+        """The shared thesis transform (THESIS_TRANSFORM), the same for every architecture."""
+        return cls(augment=augment, **THESIS_TRANSFORM)
 
     def config(self):
         return dict(bands=list(self.bands), image_size=self.image_size, resize_mode=self.resize_mode,

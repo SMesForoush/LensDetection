@@ -19,6 +19,20 @@ an old name for `--train_data both`. `system_info.json` and `test_results.json` 
 `split_seed`, and `test_results.json` also has `split_sizes` (images, lenses and sources per split).
 `datasets.sources.all_real_samples(args)` returns every usable real image, unsplit, for the evaluation on real data.
 
+**Input transform.** `--input_preset` (in `train.py` and every pipeline) sets what the model sees:
+
+| `--input_preset` | Input |
+|---|---|
+| `thesis` (default) | The same for every architecture: 4 bands in natural order `0,1,2,3` (F115W, F150W, F277W, F444W), 300 x 300 (native 0.03″/px, no resampling), per band and per image clipped to the 0.5–99.5 percentiles, scaled to [0, 1] and asinh-stretched with softening 0.1 (`datasets/transforms.py::THESIS_TRANSFORM`, `ModelInputTransform.thesis_default()`) |
+| `native` | The model's own published input, for the pretrained side experiment: LensNet raw MJy/sr (the pilot runs), TEGLIE and DeepLens bands `2,3,1,0` at 101 x 101 with their own scaling, GraViT 3 bands at 224 x 224 (GraViT supports only `native`) |
+
+`--bands`, `--image_size`, `--resize_mode` and the model-specific scaling options (`--zscale_contrast`,
+`--scaling_mode`, `--clip_pct`, `--flux_scale`, `--stretch`) only apply with `native`; with `thesis`, a `--bands`,
+`--image_size` or `--resize_mode` that differs from the thesis values is an error. `system_info.json` records
+`input_preset` and the full `transform`, and every checkpoint stores the transform, so `pipelines/load.py` rebuilds it.
+Before the presets existed, `train.py` fed LensNet raw pixel values (its pilot run collapsed and predicted every image
+as a lens) and each pipeline used its native input.
+
 **Corrupted files.** Before splitting, `datasets/quality.py` checks every file and drops the ones that cannot be
 loaded, cannot be brought to 4×300×300, have more than 50 % NaN/inf pixels, or are all zero. The log prints
 `<source>: dropped N corrupted files of M` per source; `data_quality_report.json` lists each dropped file and its
@@ -94,7 +108,7 @@ Three pipelines fine-tune published lens-detection models on the base dataset
 (`datasets/base.py::LensDatasetMemoryEfficient`, 4 x 300 x 300 cutouts). They use the same file sources,
 seed and split as `train.py`, so test results are directly comparable with LensNet.
 
-| Pipeline | Model | Pretrained weights | Model input |
+| Pipeline | Model | Pretrained weights | Model input with `--input_preset native` |
 |---|---|---|---|
 | `pipelines/gravit.py` | GraViT ViT / DeiT / DeiT3 / CaiT / CvT / Swin / PiT / MLP-Mixer / Twins (Parlange et al. 2025) | HuggingFace `parlange/<family>-gravit-<exp>` | 3 bands, 224 x 224, [0, 1] stretch + ImageNet norm |
 | `pipelines/teglie.py` | TEGLIE / Lens Detector 15, CNN + transformer encoder (Thuruthipilly et al. 2022; Grespan et al. 2024) | `Lens Detector 15.h5` (challenge sims) or `Rotated_Flipped_Transposed.h5` (after KiDS fine-tuning) | 4 bands (r, i, g, u), 101 x 101, clipped to [-100, 100] |
@@ -120,13 +134,15 @@ Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accept
 arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--prism_dir`,
 `--max_samples_per_class`, ...), plus:
 
-- `--bands`: which base-data channels feed the model's input slots. The defaults assume the four base
-  channels are ordered blue to red. GraViT uses `3,2,1` (RGB); TEGLIE and DeepLens use `2,3,1,0`, the analogue
+- `--input_preset thesis|native` (see above). With `thesis` (default) TEGLIE and DeepLens see 300 x 300 inputs, so
+  DeepLens' dense head is re-initialised and the log warns that the pretrained weights expect `native`.
+- `--bands` (`native` only): which base-data channels feed the model's input slots. The defaults assume the four
+  base channels are ordered blue to red. GraViT uses `3,2,1` (RGB); TEGLIE and DeepLens use `2,3,1,0`, the analogue
   of their r, i, g, u order. Change this if the channel order is different.
 - Freezing: GraViT `--finetune head|half|all` (GraViT strategies 1/2/3). TEGLIE `--freeze_stages 0|1|2`
   (none, CNN backbone, backbone + encoder). DeepLens `--freeze_stages 0..6` (stem + residual groups).
 - `--learning_rate` (backbone) and `--head_learning_rate`, `--augment` (flips + 90 degree rotations),
-  `--resize_mode resize|center_crop`.
+  `--resize_mode resize|center_crop` (`native` only).
 
 ### Outputs (in `--output_dir`)
 
@@ -175,5 +191,5 @@ lenses + all non-lenses, `calibration` = calibration lenses + all non-lenses). N
   matches the published weights exactly. The ResNet-18 baselines ship only pickles and are not supported.
 - TEGLIE was trained on KiDS-like fluxes and clips at +-1e-9. `--scaling_mode robust` (default) clips each band
   at its 99.5th percentile instead; `--scaling_mode absolute --flux_scale <k>` reproduces the original.
-- CMU DeepLens' dense head depends on the input size. With `--image_size` other than 101, only the
-  convolutional weights are reused.
+- CMU DeepLens' dense head depends on the input size. At any input size other than 101 (including the thesis
+  preset's 300), only the convolutional weights are reused.
