@@ -78,7 +78,6 @@ srun python3 -m "pipelines.$MODEL" \
     --output_dir "$OUTPUT_DIR" \
     --max_samples_per_class 30000 \
     --lens_weight_multiplier 1.2 \
-    --min_specificity 0.8 \
     --gpu \
     --num_workers 6 \
     --seed 42 \

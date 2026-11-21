@@ -96,9 +96,9 @@ lenses from 56 / 12 / 12 lens systems) at split seed 42. `--val_region` and `--t
 `--train_data prism`. `--mock_data_dir` is accepted as another name for `--prism_dir`.
 
 ```bash
-python -m pipelines.lensnet --augment --output_dir results/lensnet_prism --gpu              # PRISM only (default)
-python -m pipelines.lensnet --augment --train_data real --output_dir results/lensnet_real --gpu
-python -m pipelines.lensnet --augment --train_data both --output_dir results/lensnet_real_prism --gpu
+python -m pipelines.lensnet --output_dir results/lensnet_prism --gpu              # PRISM only (default)
+python -m pipelines.lensnet --train_data real --output_dir results/lensnet_real --gpu
+python -m pipelines.lensnet --train_data both --output_dir results/lensnet_real_prism --gpu
 ```
 
 **Copying data from Roihu (not used now).** The laptop already has the data. `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
@@ -123,15 +123,15 @@ about 20x faster on the GPU than on the CPU.
 ## LensNet baseline
 
 `python -m pipelines.lensnet` trains `models/lensnet.py::LensNet` (a five-block VGG-style CNN with global average
-pooling, 1,753,570 parameters) from random initialisation. It uses `run_finetuning`, so its loss, optimiser, schedule,
-early stopping, validation threshold, outputs and checkpoint are the same as the other pipelines', and
+pooling, 1,753,570 parameters) from random initialisation. It uses `run_finetuning`, so its training recipe (see
+"Training recipe" below), validation threshold, outputs and checkpoint are the same as the other pipelines', and
 `pipelines/load.py::load_finetuned` reloads it. The input follows decision D4: bands `0,1,2,3` (F115W, F150W, F277W,
 F444W), 300 × 300 px, each band scaled to [0, 1] between its 0.5 and 99.5 percentiles and asinh-stretched (softening
-0.1). `--scaling none` feeds the raw MJy/sr values as `train.py` did; `--augment` adds random flips and 90°
-rotations to the training images. `--dropout` (default 0.5) and the shared training arguments apply.
+0.1). `--scaling none` feeds the raw MJy/sr values as `train.py` did. `--dropout` (default 0.5) and the shared
+training arguments apply.
 
 ```bash
-python -m pipelines.lensnet --augment --output_dir results/lensnet_prism --gpu
+python -m pipelines.lensnet --output_dir results/lensnet_prism --gpu
 ```
 
 `train.py` is the earlier LensNet script, kept as **legacy** so the pilot runs can be reproduced. It has its own loop
@@ -183,7 +183,7 @@ and the original `.h5` weights are read with `h5py`, so training does not need T
 bash scripts/download_weights.sh weights           # add GraViT repo ids as extra args
 
 python -m pipelines.deeplens --output_dir results/deeplens --gpu                 # from scratch
-python -m pipelines.efficientnet --augment --output_dir results/efficientnet --gpu   # from scratch, no weights
+python -m pipelines.efficientnet --output_dir results/efficientnet --gpu           # from scratch, no weights
 python -m pipelines.teglie --weights "weights/teglie/Lens Detector 15.h5" --input_preset native --freeze_stages 1 \
     --output_dir results/teglie_pretrained --gpu                               # fine-tuned (side experiment)
 python -m pipelines.gravit --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors \
@@ -204,12 +204,32 @@ arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--
 - Freezing: GraViT `--finetune head|half|all` (GraViT strategies 1/2/3). TEGLIE `--freeze_stages 0|1|2`
   (none, CNN backbone, backbone + encoder). DeepLens `--freeze_stages 0..6` (stem + residual groups). Both need
   `--weights`. EfficientNet trains every layer.
-- `--learning_rate` (backbone) and `--head_learning_rate`, `--augment` (flips + 90 degree rotations),
-  `--resize_mode resize|center_crop` (`native` only).
+- `--resize_mode resize|center_crop` (`native` only).
+
+### Training recipe
+
+Every from-scratch run (LensNet, DeepLens and TEGLIE without `--weights`, EfficientNet-B0) uses one recipe, the
+defaults of `pipelines/common.py::build_arg_parser` (C13). No pipeline overrides them:
+
+- cross-entropy with no class weights (`--class_weighting none`; PRISM is 1:1) and no label smoothing
+- AdamW, `--learning_rate 1e-3`, `--weight_decay 1e-4`; 1 epoch of linear warm-up, then cosine decay to 1 % of the
+  peak LR (`--warmup_epochs`, `--min_lr_ratio`); gradient clipping at norm 1
+- `--batch_size 64`, at most `--epochs 50`
+- early stopping with `--early_stop_patience 10` on the **validation loss**; `best_model.pth` is the epoch with the
+  lowest validation loss (`"selection": "min_val_loss"`)
+- PyTorch's default initialisation, and D4 augmentation (random flips + 90° rotations) on: `--augment` is the
+  default, `--no-augment` turns it off
+
+Runs that start from pretrained weights (DeepLens or TEGLIE with `--weights`, and GraViT) are side experiments and use
+the `finetune` recipe instead: `FINETUNE_RECIPE` (lr 1e-4, weight decay 1e-2, 30 epochs, label smoothing 0.1,
+balanced class weights) plus each model's own fine-tuning values (DeepLens: weight decay 1e-4, 50 epochs; TEGLIE:
+50 epochs, at least 20; GraViT: backbone lr 2e-5, head lr 1e-3, weight decay 0.05, 2 warm-up epochs). Arguments
+given on the command line always win. `system_info.json` and `test_results.json` record `recipe` (`thesis` or
+`finetune`) and `selection`.
 
 ### Outputs (in `--output_dir`)
 
-`best_model.pth` (selected on validation F2 with `--min_specificity`), `last_model.pth`, `training_history.json`,
+`best_model.pth` (the epoch with the lowest validation loss), `last_model.pth`, `training_history.json`,
 `test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`,
 `data_quality_report.json` (dropped corrupted files), `finetune.log`. LensNet writes the same files.
 The decision threshold is tuned for F2 on the validation set and then applied to the test set. It is also stored in

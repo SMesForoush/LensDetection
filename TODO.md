@@ -27,8 +27,8 @@ Last updated 2026-11-21 (Roihu dropped: every run is now on the laptop, see "Whe
 
 **What the code does today:** it trains, validates and tests on PRISM only by default (`--train_data prism`, C6), and
 feeds every model the same input (`--input_preset thesis`, C9). DeepLens and TEGLIE train from random initialisation
-unless `--weights` is given (C11), but each model still has its own recipe. `--train_data real|both` keeps the old
-real-data split by sky region. Most items below exist to close the remaining gap.
+unless `--weights` is given (C11), and every from-scratch run uses one training recipe (C13). `--train_data real|both`
+keeps the old real-data split by sky region. Most items below exist to close the remaining gap.
 
 ### Where runs happen
 
@@ -63,7 +63,7 @@ val 973 (56), test 940 (48), with 45 dropped.
 | `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
 
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. `ModelInputTransform.thesis_default()` is the shared D4 input (`--input_preset thesis`, default; C9). |
-| `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
+| `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`, whose defaults are the thesis training recipe (C13); `parse_args_with_recipe` switches pretrained runs to `FINETUNE_RECIPE`. |
 | `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py`, `efficientnet.py` | One script per model, built on `run_finetuning`. LensNet (C10) and EfficientNet-B0 (C12) train from scratch with the D4 input. DeepLens and TEGLIE train from scratch without `--weights` (C11); GraViT always loads its weights. |
 | `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
 | `train.py` | **Legacy** LensNet loop that does not use `run_finetuning` (kept to reproduce the pilot runs). Use `pipelines/lensnet.py`. |
@@ -281,7 +281,17 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 - **Done when:** a 2-epoch smoke run works and `load_finetuned` reloads the checkpoint.
 
 ### C13. One shared training recipe
-- **Status:** open
+- **Status:** done (PR_LINK). The `build_arg_parser` defaults are the thesis recipe: cross-entropy with
+  `--class_weighting none` and label smoothing 0, AdamW lr 1e-3, weight decay 1e-4, 1-epoch warm-up + cosine, batch
+  64, at most 50 epochs, `--augment` on by default (`--no-augment`), early stopping (patience 10) and checkpoint
+  selection on the validation loss (`SELECTION_RULE = "min_val_loss"`); `--min_specificity` is gone. LensNet,
+  DeepLens, TEGLIE and EfficientNet set no recipe defaults of their own. Pretrained runs (`--weights`, GraViT) go
+  through `parse_args_with_recipe`, which applies `FINETUNE_RECIPE` (the pre-C13 shared values) plus each model's old
+  fine-tuning values. `system_info.json` and `test_results.json` record `recipe` and `selection`. Smoke runs
+  (MPS, 100 per class, 2 epochs) of LensNet, DeepLens and EfficientNet-B0: `system_info.json` `arguments` differ only
+  in model flags (`dropout`, `drop_path_rate`, `freeze_stages`, `weights`, `image_size`, and the input flags that only
+  apply with `--input_preset native` or LensNet's `--scaling`), `transform` is identical, and all three reload with
+  `load_finetuned`. `slurm/finetune.sh` no longer passes `--min_specificity` (it would not parse).
 - **Depends on:** D1, C10
 - **Files:** `pipelines/common.py` (`build_arg_parser` defaults, `run_finetuning`), and the per-model
   `p.set_defaults(...)` calls
