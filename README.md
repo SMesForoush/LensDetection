@@ -2,7 +2,8 @@
 
 ## Data and training from scratch
 
-`train.py` trains LensNet from scratch, and `pipelines/` fine-tunes pretrained models. Both read the same
+`train.py` trains LensNet from scratch. `pipelines/` trains DeepLens and TEGLIE from scratch (no `--weights`, the
+thesis experiment) or fine-tunes their published weights (`--weights`), and fine-tunes GraViT. Both read the same
 data sources through `datasets/sources.py` and use the same split.
 
 **Data mode.** `--train_data` sets which images train, validate and test the model:
@@ -78,8 +79,9 @@ lenses from 56 / 12 / 12 lens systems) at split seed 42. `--val_region` and `--t
 python train.py --output_dir results/lensnet_prism --gpu                      # PRISM only (default)
 python train.py --train_data real --output_dir results/lensnet_real --gpu
 python train.py --train_data both --output_dir results/lensnet_real_prism --gpu
-sbatch slurm/finetune.sh                       # fine-tuning on PRISM only
-TRAIN_DATA=real sbatch slurm/finetune.sh       # fine-tuning on real data (TRAIN_DATA=both: real + PRISM)
+sbatch slurm/finetune.sh                       # DeepLens from scratch on PRISM only
+TRAIN_DATA=real sbatch slurm/finetune.sh       # on real data (TRAIN_DATA=both: real + PRISM)
+PRETRAINED=1 INPUT_PRESET=native sbatch slurm/finetune.sh   # fine-tune the published LEXACTUM weights
 ```
 
 **Running off Roihu.** `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
@@ -102,9 +104,9 @@ python train.py --prism_dir cosmos_data/prism --output_dir results/local_prism -
 `train.py` and all three pipelines. Mixed precision stays CUDA-only. On an M-series Mac, CMU DeepLens epochs ran
 about 20x faster on the GPU than on the CPU.
 
-## Fine-tuning pretrained lens finders
+## Published lens finders: from scratch or fine-tuned
 
-Three pipelines fine-tune published lens-detection models on the base dataset
+Three pipelines train published lens-detection architectures on the base dataset
 (`datasets/base.py::LensDatasetMemoryEfficient`, 4 x 300 x 300 cutouts). They use the same file sources,
 seed and split as `train.py`, so test results are directly comparable with LensNet.
 
@@ -113,6 +115,13 @@ seed and split as `train.py`, so test results are directly comparable with LensN
 | `pipelines/gravit.py` | GraViT ViT / DeiT / DeiT3 / CaiT / CvT / Swin / PiT / MLP-Mixer / Twins (Parlange et al. 2025) | HuggingFace `parlange/<family>-gravit-<exp>` | 3 bands, 224 x 224, [0, 1] stretch + ImageNet norm |
 | `pipelines/teglie.py` | TEGLIE / Lens Detector 15, CNN + transformer encoder (Thuruthipilly et al. 2022; Grespan et al. 2024) | `Lens Detector 15.h5` (challenge sims) or `Rotated_Flipped_Transposed.h5` (after KiDS fine-tuning) | 4 bands (r, i, g, u), 101 x 101, clipped to [-100, 100] |
 | `pipelines/deeplens.py` | LEXACTUM CMU DeepLens (Magro et al. 2021) | Zenodo 4299924, `ground_cmu_deeplens_<N>epochs.h5` | 4 bands (R, I, G, U), 101 x 101, per-band ZScale |
+
+**From scratch (the thesis experiment).** `--weights` is optional for TEGLIE and DeepLens. Without it the network
+starts from PyTorch's default initialisation, every layer is trained, `--freeze_stages` is an error, and
+`system_info.json` records `"pretrained": null`. With the default `--input_preset thesis`, DeepLens then has
+3,557,281 trainable parameters (its dense head sees 9 x 9 x 512 features at 300 px instead of 3 x 3 x 512 at 101 px).
+GraViT always loads its weights. In `slurm/finetune.sh`, `PRETRAINED=1` adds the published weights for TEGLIE and
+DeepLens; the default `0` trains from scratch.
 
 TEGLIE and LEXACTUM are Keras models. They are ported to PyTorch (`models/teglie.py`, `models/deeplens.py`),
 and the original `.h5` weights are read with `h5py`, so training does not need TensorFlow.
@@ -126,21 +135,23 @@ pip install --user -r requirements-finetune.txt   # if the pytorch module lacks 
 bash scripts/download_weights.sh weights           # on a login node (add GraViT repo ids as extra args)
 
 sbatch slurm/finetune.sh gravit   --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors
-sbatch slurm/finetune.sh teglie   --freeze_stages 1
-sbatch slurm/finetune.sh deeplens
+PRETRAINED=1 INPUT_PRESET=native sbatch slurm/finetune.sh teglie   --freeze_stages 1
+sbatch slurm/finetune.sh deeplens     # from scratch
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
 arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--prism_dir`,
 `--max_samples_per_class`, ...), plus:
 
+- `--weights` (TEGLIE, DeepLens: optional, see above; GraViT: required).
 - `--input_preset thesis|native` (see above). With `thesis` (default) TEGLIE and DeepLens see 300 x 300 inputs, so
-  DeepLens' dense head is re-initialised and the log warns that the pretrained weights expect `native`.
+  with `--weights` DeepLens' dense head is re-initialised and the log warns that the pretrained weights expect `native`.
 - `--bands` (`native` only): which base-data channels feed the model's input slots. The defaults assume the four
   base channels are ordered blue to red. GraViT uses `3,2,1` (RGB); TEGLIE and DeepLens use `2,3,1,0`, the analogue
   of their r, i, g, u order. Change this if the channel order is different.
 - Freezing: GraViT `--finetune head|half|all` (GraViT strategies 1/2/3). TEGLIE `--freeze_stages 0|1|2`
-  (none, CNN backbone, backbone + encoder). DeepLens `--freeze_stages 0..6` (stem + residual groups).
+  (none, CNN backbone, backbone + encoder). DeepLens `--freeze_stages 0..6` (stem + residual groups). Both need
+  `--weights`.
 - `--learning_rate` (backbone) and `--head_learning_rate`, `--augment` (flips + 90 degree rotations),
   `--resize_mode resize|center_crop` (`native` only).
 

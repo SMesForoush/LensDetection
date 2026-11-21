@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Fine-tune LEXACTUM's CMU DeepLens (Magro et al. 2021; architecture from Lanusse et al. 2018).
+"""Train CMU DeepLens (Lanusse et al. 2018) from scratch, or fine-tune LEXACTUM's weights (Magro et al. 2021).
 
+    python -m pipelines.deeplens --output_dir ... --gpu [--train_data prism|real|both --prism_dir ...]
     python -m pipelines.deeplens --weights weights/lexactum/ground_cmu_deeplens_250epochs.h5 \
-        --output_dir ... --gpu [--train_data prism|real|both --prism_dir ...]
+        --input_preset native --output_dir ... --gpu
+
+Without --weights (the thesis experiment) the network starts from PyTorch's default initialisation and every layer
+is trained; --freeze_stages needs --weights. With --weights the LEXACTUM Keras weights are loaded first.
 
 Weights: https://doi.org/10.5281/zenodo.4299924 (see scripts/download_weights.sh).
     ground_cmu_deeplens_<N>epochs.h5   4 bands (R, I, G, U), Lens Finding Challenge ground-based set
@@ -33,16 +37,20 @@ def build_model(cfg):
 def parse_args(argv=None):
     p = build_arg_parser(__doc__)
     g = p.add_argument_group("CMU DeepLens")
-    g.add_argument("--weights", required=True, help="LEXACTUM Keras .h5 (ground_* for 4 bands, space_* for 1)")
+    g.add_argument("--weights", help="LEXACTUM Keras .h5 to fine-tune (ground_* for 4 bands, space_* for 1). "
+                                     "Default: none, train from random initialisation")
     g.add_argument("--image_size", type=int,
                    help=f"Model input size, --input_preset native only (default {NATIVE_SIZE}, the size of the weights)")
     g.add_argument("--freeze_stages", type=int, default=0, choices=range(7),
-                   help="Freeze the stem + first N-1 residual groups (0 = train all, 6 = head only)")
+                   help="Freeze the stem + first N-1 residual groups (0 = train all, 6 = head only); needs --weights")
     g.add_argument("--dropout", type=float, default=0.0, help="Dropout before the dense head (original: none)")
     g.add_argument("--zscale_contrast", type=float, default=0.25, help="--input_preset native only")
     # Original training: Adam (lr 1e-3), binary cross-entropy, batch 8
     p.set_defaults(learning_rate=1e-4, weight_decay=1e-4, batch_size=64, epochs=50)
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.freeze_stages and not args.weights:
+        p.error("--freeze_stages needs --weights: freezing randomly initialised layers is never wanted")
+    return args
 
 
 def main(argv=None):
@@ -56,18 +64,21 @@ def main(argv=None):
         resize_mode=args.resize_mode, scaling="zscale", contrast=args.zscale_contrast), logger)
     model_config = dict(in_channels=len(transform.bands), image_size=transform.image_size, dropout=args.dropout)
     model = build_model(model_config)
-    skip_head = transform.image_size != NATIVE_SIZE
-    if skip_head:
-        logger.warning(f"image_size={transform.image_size} != {NATIVE_SIZE}: the dense head is re-initialised")
-    if args.input_preset != "native":
-        logger.warning("Pretrained weights with the thesis input preset: the weights expect --input_preset native")
-    load_keras_h5(model, args.weights, skip_head=skip_head)
-    freeze_modules(model.stage_modules()[:args.freeze_stages])
-    logger.info(f"Loaded CMU DeepLens weights from {args.weights}; frozen stages: {args.freeze_stages}")
+    if args.weights:
+        skip_head = transform.image_size != NATIVE_SIZE
+        if skip_head:
+            logger.warning(f"image_size={transform.image_size} != {NATIVE_SIZE}: the dense head is re-initialised")
+        if args.input_preset != "native":
+            logger.warning("Pretrained weights with the thesis input preset: the weights expect --input_preset native")
+        load_keras_h5(model, args.weights, skip_head=skip_head)
+        freeze_modules(model.stage_modules()[:args.freeze_stages])
+        logger.info(f"Loaded CMU DeepLens weights from {args.weights}; frozen stages: {args.freeze_stages}")
+    else:
+        logger.info("No --weights: training CMU DeepLens from random initialisation")
 
     head_params = [p for m in model.head_modules() for p in m.parameters()]
     run_finetuning(args, "deeplens", model, model_config, head_params, transform, logger,
-                   extra_info={"pretrained": str(args.weights)})
+                   extra_info={"pretrained": str(args.weights) if args.weights else None})
 
 
 if __name__ == "__main__":
