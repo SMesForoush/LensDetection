@@ -8,39 +8,40 @@ Weights: https://doi.org/10.5281/zenodo.4299924 (see scripts/download_weights.sh
     ground_cmu_deeplens_<N>epochs.h5   4 bands (R, I, G, U), Lens Finding Challenge ground-based set
     space_cmu_deeplens_<N>epochs.h5    1 band (Euclid VIS-like), space-based set
 
-Inputs are 101x101 with each band ZScale-normalised to [0, 1] (astropy), as in LEXACTUM. The dense head
-depends on the input size, so with --image_size other than 101 only the convolutional weights are reused.
+Inputs: by default (--input_preset thesis) the shared thesis transform, 4 bands 0,1,2,3 at 300x300 with a per-band
+asinh stretch (datasets/transforms.py::THESIS_TRANSFORM). --input_preset native restores LEXACTUM's own input:
+bands 2,3,1,0 (R, I, G, U slots) at 101x101, each band ZScale-normalised to [0, 1] (astropy). The dense head depends
+on the input size, so at any size other than 101 only the convolutional weights are reused.
 """
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from datasets.transforms import ModelInputTransform, parse_bands  # noqa: E402
+from datasets.transforms import parse_bands  # noqa: E402
 from models.deeplens import CMUDeepLens, load_keras_h5  # noqa: E402
-from pipelines.common import (build_arg_parser, freeze_modules, run_finetuning, set_random_seeds,  # noqa: E402
-                              setup_logging)
+from pipelines.common import (build_arg_parser, build_input_transform, freeze_modules, run_finetuning,  # noqa: E402
+                              set_random_seeds, setup_logging)
+
+NATIVE_BANDS, NATIVE_SIZE = "2,3,1,0", 101  # LEXACTUM: R, I, G, U slots at 101x101
 
 
 def build_model(cfg):
     return CMUDeepLens(**cfg)
 
 
-def build_transform(cfg, augment=False):
-    return ModelInputTransform(augment=augment, **cfg)
-
-
 def parse_args(argv=None):
     p = build_arg_parser(__doc__)
     g = p.add_argument_group("CMU DeepLens")
     g.add_argument("--weights", required=True, help="LEXACTUM Keras .h5 (ground_* for 4 bands, space_* for 1)")
-    g.add_argument("--image_size", type=int, default=101, help="Model input size (weights were trained at 101)")
+    g.add_argument("--image_size", type=int,
+                   help=f"Model input size, --input_preset native only (default {NATIVE_SIZE}, the size of the weights)")
     g.add_argument("--freeze_stages", type=int, default=0, choices=range(7),
                    help="Freeze the stem + first N-1 residual groups (0 = train all, 6 = head only)")
     g.add_argument("--dropout", type=float, default=0.0, help="Dropout before the dense head (original: none)")
-    g.add_argument("--zscale_contrast", type=float, default=0.25)
+    g.add_argument("--zscale_contrast", type=float, default=0.25, help="--input_preset native only")
     # Original training: Adam (lr 1e-3), binary cross-entropy, batch 8
-    p.set_defaults(bands="2,3,1,0", learning_rate=1e-4, weight_decay=1e-4, batch_size=64, epochs=50)
+    p.set_defaults(learning_rate=1e-4, weight_decay=1e-4, batch_size=64, epochs=50)
     return p.parse_args(argv)
 
 
@@ -50,18 +51,20 @@ def main(argv=None):
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     logger = setup_logging(args.output_dir, "finetune_deeplens")
 
-    bands = parse_bands(args.bands)
-    model_config = dict(in_channels=len(bands), image_size=args.image_size, dropout=args.dropout)
+    transform = build_input_transform(args, dict(
+        bands=parse_bands(args.bands or NATIVE_BANDS), image_size=args.image_size or NATIVE_SIZE,
+        resize_mode=args.resize_mode, scaling="zscale", contrast=args.zscale_contrast), logger)
+    model_config = dict(in_channels=len(transform.bands), image_size=transform.image_size, dropout=args.dropout)
     model = build_model(model_config)
-    skip_head = args.image_size != 101
+    skip_head = transform.image_size != NATIVE_SIZE
     if skip_head:
-        logger.warning(f"image_size={args.image_size} != 101: the dense head is re-initialised")
+        logger.warning(f"image_size={transform.image_size} != {NATIVE_SIZE}: the dense head is re-initialised")
+    if args.input_preset != "native":
+        logger.warning("Pretrained weights with the thesis input preset: the weights expect --input_preset native")
     load_keras_h5(model, args.weights, skip_head=skip_head)
     freeze_modules(model.stage_modules()[:args.freeze_stages])
     logger.info(f"Loaded CMU DeepLens weights from {args.weights}; frozen stages: {args.freeze_stages}")
 
-    transform = build_transform(dict(bands=bands, image_size=args.image_size, resize_mode=args.resize_mode,
-                                     scaling="zscale", contrast=args.zscale_contrast), augment=args.augment)
     head_params = [p for m in model.head_modules() for p in m.parameters()]
     run_finetuning(args, "deeplens", model, model_config, head_params, transform, logger,
                    extra_info={"pretrained": str(args.weights)})

@@ -6,7 +6,7 @@
 
 The checkpoint stores the architecture config and the exact input transform, so no pretrained weights
 or network access are needed. LensNet checkpoints written by train.py before it stored these are rebuilt from their
-saved arguments (LensNet sees the raw base-dataset cutouts, so its transform is the identity).
+saved arguments (those runs fed LensNet the raw base-dataset cutouts, so their transform is the identity).
 
 `frozen_threshold` returns the decision threshold that the training run chose on its validation set.
 """
@@ -22,7 +22,8 @@ from datasets.transforms import ModelInputTransform  # noqa: E402
 from pipelines.common import two_class_logits  # noqa: E402
 
 
-# train.py feeds LensNet the raw (4, 300, 300) base-dataset tensors; this transform config is the identity.
+# train.py --input_preset native (and every train.py run before the presets existed) feeds LensNet the raw
+# (4, 300, 300) base-dataset tensors; this transform config is the identity.
 LENSNET_RAW_TRANSFORM = dict(bands=[0, 1, 2, 3], image_size=300, resize_mode="resize", scaling="none",
                              imagenet_norm=False)
 

@@ -25,8 +25,9 @@ Last updated 2026-11-16 (after [SMesForoush/LensDetection#7](https://github.com/
 5. **Train each architecture with 3–5 seeds** and report mean ± sd, plus bootstrap 95 % intervals over test images.
 6. **Do a structured error analysis** of false positives and false negatives on the real set.
 
-**What the code does today:** it trains, validates and tests on PRISM only by default (`--train_data prism`, C6), but
-still fine-tunes published weights with model-specific inputs and recipes. `--train_data real|both` keeps the old
+**What the code does today:** it trains, validates and tests on PRISM only by default (`--train_data prism`, C6), and
+feeds every model the same input (`--input_preset thesis`, C9), but still fine-tunes published weights with
+model-specific recipes. `--train_data real|both` keeps the old
 real-data split by sky region. Most items below exist to close the remaining gap.
 
 ### Data
@@ -50,7 +51,7 @@ val 973 (56), test 940 (48), with 45 dropped.
 | `scripts/error_analysis.py` | C17: picks the median-ROC-AUC seed per architecture, samples its real-data FP/FN, renders a blind gallery and writes an empty coding sheet plus the cross-model overlap table. |
 | `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
 
-| `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. |
+| `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. `ModelInputTransform.thesis_default()` is the shared D4 input (`--input_preset thesis`, default; C9). |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
 | `pipelines/deeplens.py`, `teglie.py`, `gravit.py` | One script per model, built on `run_finetuning`. |
 | `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
@@ -190,7 +191,13 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Done when:** running it on a smoke-test checkpoint writes both files, and the counts add up to 277 + 4,754.
 
 ### C9. One shared input transform and size
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#15](https://github.com/SMesForoush/LensDetection/pull/15)). `--input_preset {thesis,native}` (default `thesis`) in
+  `train.py` and every pipeline. `thesis` = `ModelInputTransform.thesis_default()` (`THESIS_TRANSFORM` in
+  `datasets/transforms.py`: bands 0,1,2,3, 300 px, `unit_asinh` 0.5–99.5 %, softening 0.1); with it, a `--bands`,
+  `--image_size` or `--resize_mode` that differs is an error. `native` = each model's published input (LensNet raw,
+  TEGLIE/DeepLens 2,3,1,0 at 101 px, GraViT 3 bands at 224 px; GraViT only supports `native`). `system_info.json`
+  records `input_preset` and `transform` (now also from `train.py`); `slurm/finetune.sh` takes `INPUT_PRESET`.
+  DeepLens and TEGLIE still load pretrained weights until C11 makes them optional.
 - **Depends on:** D4
 - **Files:** `datasets/transforms.py`, `pipelines/*.py`, `train.py`
 - **Now:** each pipeline builds its own `ModelInputTransform` with a different scaling, size and band order. `train.py`

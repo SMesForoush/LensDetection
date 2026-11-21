@@ -30,6 +30,13 @@ COSMOS_ROOT="/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling"
 PRISM_DIR="/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5"
 if [ "${INCLUDE_PRISM:-0}" = 1 ] && [ -z "${TRAIN_DATA:-}" ]; then TRAIN_DATA=both; fi
 TRAIN_DATA="${TRAIN_DATA:-prism}"
+# INPUT_PRESET picks the input transform (datasets/transforms.py):
+#   thesis (default)  the one transform shared by every architecture: bands 0,1,2,3, 300x300, per-band unit_asinh
+#   native            the model's own published input (TEGLIE/DeepLens 2,3,1,0 at 101 px), for the pretrained side
+#                     experiment. GraViT only supports native.
+# e.g.  INPUT_PRESET=native sbatch slurm/finetune.sh
+INPUT_PRESET="${INPUT_PRESET:-thesis}"
+if [ "$MODEL" = gravit ]; then INPUT_PRESET=native; fi
 WEIGHTS_DIR="${WEIGHTS_DIR:-weights}"
 OUTPUT_DIR="$SCRATCH_DIR/finetune_${MODEL}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR" logs
@@ -47,11 +54,12 @@ case "$MODEL" in
         echo "Unknown model '$MODEL'"; exit 1 ;;
 esac
 
-echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: fine-tuning $MODEL (train_data=$TRAIN_DATA) -> $OUTPUT_DIR"
+echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: fine-tuning $MODEL (train_data=$TRAIN_DATA, input_preset=$INPUT_PRESET) -> $OUTPUT_DIR"
 nvidia-smi
 
 srun python3 -m "pipelines.$MODEL" \
     --train_data "$TRAIN_DATA" \
+    --input_preset "$INPUT_PRESET" \
     --cosmos_root "$COSMOS_ROOT" \
     --prism_dir "$PRISM_DIR" \
     --output_dir "$OUTPUT_DIR" \
