@@ -59,6 +59,7 @@ val 973 (56), test 940 (48), with 45 dropped.
 | `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every real image, unsplit, for C8. Both return `(samples, quality_report)`: corrupted files are dropped first (C14). |
 | `datasets/quality.py` | Finds corrupted files (unreadable, wrong shape, > 50 % NaN/inf, all zero) before training, cached per data directory in `file_qc.json` (C14). |
 | `pipelines/evaluate_real.py` | C8: scores all real images with a checkpoint at its frozen validation threshold and writes `real_predictions.csv` + `real_results.json`. |
+| `scripts/run_seeds.sh`, `scripts/aggregate_runs.py` | C16: train models × seeds into `results/<model>/seed_<s>/` (resumable), then mean ± sd per model and set as CSV and LaTeX `tabular`. |
 | `scripts/error_analysis.py` | C17: picks the median-ROC-AUC seed per architecture, samples its real-data FP/FN, renders a blind gallery and writes an empty coding sheet plus the cross-model overlap table. |
 | `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
 
@@ -339,7 +340,17 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 - **Done when:** `test_results.json` contains `fpr`, `prevalence` and `ci95`, and the curve CSVs exist.
 
 ### C16. Multi-seed driver and aggregation
-- **Status:** open
+- **Status:** done (PR link: TODO). `scripts/run_seeds.sh` (defaults: `lensnet deeplens efficientnet` × seeds `0 1 2`,
+  split seed 42, `--gpu`; `--models`, `--seeds`, `--split_seed`, `--results`, `--real` to also run
+  `pipelines.evaluate_real`, `--cpu`, `--dry_run`; arguments after `--` go to every run and may not set `--seed`,
+  `--split_seed` or `--output_dir`). It skips a (model, seed) with a `test_results.json` (and, with `--real`, with a
+  `real_results.json`), keeps going after a failed run and lists the failures at the end (exit 1). From a worktree it
+  uses the main checkout's `.venv`. `scripts/aggregate_runs.py` reads the model and seed from `system_info.json`
+  (else the `<model>/seed_<s>` path) and writes `metrics_long.csv`, `summary.csv` (mean, sample sd, min, max),
+  `runs.csv` and `summary_<set>.tex` for the sets `prism_test` (only `--train_data prism` runs), `real`,
+  `real_confident` and `real_calibration`; FPR and prevalence are derived from the confusion matrix until C15 adds
+  them. Smoke test (LensNet, seeds 0 and 1, 100 per class, 2 epochs, `--real`): both runs trained and scored 5,031
+  real images; a second call skipped both; the aggregator printed mean ± sd and wrote the four `.tex` snippets.
 - **Depends on:** D5. Most useful after C6, C9–C13.
 - **Files:** new `scripts/run_seeds.sh` (a plain sequential loop on the laptop), new `scripts/aggregate_runs.py`
 - **To do:**
