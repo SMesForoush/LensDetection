@@ -183,9 +183,9 @@ def dropped_counts(report):
     return {source: stats["dropped"] for source, stats in report["per_source"].items()}
 
 
-def save_report(report, output_dir):
-    """Write the drop report to <output_dir>/data_quality_report.json and return the path."""
-    path = Path(output_dir) / "data_quality_report.json"
+def save_report(report, output_dir, filename="data_quality_report.json"):
+    """Write the drop report to <output_dir>/<filename> and return the path."""
+    path = Path(output_dir) / filename
     with open(path, "w") as f:
         json.dump(report, f, indent=2)
     return path

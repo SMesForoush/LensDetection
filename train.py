@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """
+LEGACY. Use `python -m pipelines.lensnet` instead: it trains the same LensNet through the shared runner
+(pipelines/common.py::run_finetuning), with the same loss, schedule, early stopping, metrics and outputs as the other
+models, plus the shared input transform and optional augmentation (TODO C10). This script is kept so that the pilot
+runs can be reproduced; its checkpoints still load with pipelines/load.py. Grad-CAM is in scripts/gradcam.py.
+
 COSMOS-Web Lens Detection ML Pipeline - Research Grade Version
 
 Key Features:
@@ -152,63 +157,8 @@ def setup_mahti_environment():
 # --------------------------------------------------------------------------------------
 # Grad-CAM for Attention Visualization
 # --------------------------------------------------------------------------------------
-class GradCAM:
-    """Grad-CAM: Gradient-weighted Class Activation Mapping.
-    
-    Visualizes which regions of the image the CNN focuses on for classification.
-    Essential for interpretability in scientific applications.
-    """
-    def __init__(self, model, target_layer):
-        self.model = model
-        self.target_layer = target_layer
-        self.gradients = None
-        self.activations = None
-        
-        # Register hooks
-        target_layer.register_forward_hook(self._save_activation)
-        target_layer.register_full_backward_hook(self._save_gradient)
-    
-    def _save_activation(self, module, input, output):
-        self.activations = output.detach()
-    
-    def _save_gradient(self, module, grad_input, grad_output):
-        self.gradients = grad_output[0].detach()
-    
-    def generate_cam(self, input_tensor, target_class=None):
-        """Generate Grad-CAM heatmap for the input."""
-        self.model.eval()
-        
-        # Forward pass
-        output = self.model(input_tensor)
-        
-        if target_class is None:
-            target_class = output.argmax(dim=1)
-        
-        # Zero gradients
-        self.model.zero_grad()
-        
-        # Backward pass for target class
-        one_hot = torch.zeros_like(output)
-        one_hot[0, target_class] = 1
-        output.backward(gradient=one_hot, retain_graph=True)
-        
-        # Get weights: global average pooling of gradients
-        weights = self.gradients.mean(dim=(2, 3), keepdim=True)
-        
-        # Weighted combination of activation maps
-        cam = (weights * self.activations).sum(dim=1, keepdim=True)
-        
-        # ReLU to keep only positive influence
-        cam = F.relu(cam)
-        
-        # Normalize to [0, 1]
-        cam = cam - cam.min()
-        cam = cam / (cam.max() + 1e-8)
-        
-        # Upsample to input size
-        cam = F.interpolate(cam, size=input_tensor.shape[2:], mode='bilinear', align_corners=False)
-        
-        return cam.squeeze().cpu().numpy()
+# The GradCAM class now lives in scripts/gradcam.py, which also runs on any saved checkpoint.
+from scripts.gradcam import GradCAM  # noqa: E402
 
 def generate_gradcam_visualizations(model, test_loader, device, output_dir, num_samples=12):
     """Generate Grad-CAM attention maps for sample predictions."""
@@ -218,8 +168,7 @@ def generate_gradcam_visualizations(model, test_loader, device, output_dir, num_
     else:
         base_model = model
     
-    # Create Grad-CAM using the last convolutional layer (conv5)
-    gradcam = GradCAM(base_model, base_model.conv5)
+    gradcam = GradCAM(base_model, base_model.pool5)  # last rectified feature map (see scripts/gradcam.py)
     
     # Collect samples - get both lenses and non-lenses
     lens_samples = []
@@ -519,7 +468,8 @@ def main():
     set_random_seeds(args.seed)
     
     logger = setup_mahti_environment()
-    
+    logger.warning("train.py is legacy; `python -m pipelines.lensnet` trains LensNet with the shared runner")
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     

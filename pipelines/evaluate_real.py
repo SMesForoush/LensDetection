@@ -11,7 +11,8 @@ the manifest is scored, unsplit and unsubsampled (datasets.sources.all_real_samp
 
 Writes, next to the checkpoint unless --output_dir is given:
     real_predictions.csv   one row per real image, same columns as the training run's test_predictions.csv
-    data_quality_report.json  the corrupted real files that were dropped (datasets/quality.py)
+    real_data_quality_report.json  the corrupted real files that were dropped (datasets/quality.py); its own name,
+                           so the training run's data_quality_report.json in the same directory is kept
     real_results.json      metrics at the frozen threshold, plus the threshold-free ROC-AUC and PR-AUC:
         overall            all real images
         per_source         real_lens_confident, real_lens_calibration (recall), lookalike, real_nonlens (specificity, FPR)
@@ -140,7 +141,7 @@ def main(argv=None):
                        f"validation and test splits, so this is NOT an external evaluation")
 
     samples, quality_report = all_real_samples(args, logger)  # corrupted files dropped (datasets/quality.py)
-    logger.info(f"Data quality report saved to {save_report(quality_report, output_dir)}")
+    logger.info(f"Data quality report saved to {save_report(quality_report, output_dir, "real_data_quality_report.json")}")
     paths = [s.path for s in samples]
     labels = [s.label for s in samples]
     sources = [s.source for s in samples]
