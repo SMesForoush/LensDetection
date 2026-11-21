@@ -296,7 +296,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Done when:** with two seeds of one smoke-test model, the aggregator prints mean ± sd and writes the `.tex` snippet.
 
 ### C17. Error-analysis tools
-- **Status:** in progress (`claude/c17-error-analysis`)
+- **Status:** done ([SMesForoush/LensDetection#13](https://github.com/SMesForoush/LensDetection/pull/13))
 - **Depends on:** C8
 - **Files:** new `scripts/error_analysis.py`
 - **To do** (the procedure is in doc section 5.9):
