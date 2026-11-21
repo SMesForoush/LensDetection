@@ -26,8 +26,8 @@ Last updated 2026-11-16 (after [SMesForoush/LensDetection#7](https://github.com/
 6. **Do a structured error analysis** of false positives and false negatives on the real set.
 
 **What the code does today:** it trains, validates and tests on PRISM only by default (`--train_data prism`, C6), and
-feeds every model the same input (`--input_preset thesis`, C9), but still fine-tunes published weights with
-model-specific recipes. `--train_data real|both` keeps the old
+feeds every model the same input (`--input_preset thesis`, C9). DeepLens and TEGLIE train from random initialisation
+unless `--weights` is given (C11), but each model still has its own recipe. `--train_data real|both` keeps the old
 real-data split by sky region. Most items below exist to close the remaining gap.
 
 ### Data
@@ -53,7 +53,7 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. `ModelInputTransform.thesis_default()` is the shared D4 input (`--input_preset thesis`, default; C9). |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
-| `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py`, `efficientnet.py` | One script per model, built on `run_finetuning`. LensNet (C10) and EfficientNet-B0 (C12) train from scratch with the D4 input. |
+| `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py`, `efficientnet.py` | One script per model, built on `run_finetuning`. LensNet (C10) and EfficientNet-B0 (C12) train from scratch with the D4 input. DeepLens and TEGLIE train from scratch without `--weights` (C11); GraViT always loads its weights. |
 | `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
 | `train.py` | **Legacy** LensNet loop that does not use `run_finetuning` (kept to reproduce the pilot runs). Use `pipelines/lensnet.py`. |
 | `scripts/gradcam.py` | Grad-CAM of the lens score for rows of a predictions CSV, from any checkpoint (moved out of `train.py` in C10, for E21). |
@@ -199,7 +199,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
   `--image_size` or `--resize_mode` that differs is an error. `native` = each model's published input (LensNet raw,
   TEGLIE/DeepLens 2,3,1,0 at 101 px, GraViT 3 bands at 224 px; GraViT only supports `native`). `system_info.json`
   records `input_preset` and `transform` (now also from `train.py`); `slurm/finetune.sh` takes `INPUT_PRESET`.
-  DeepLens and TEGLIE still load pretrained weights until C11 makes them optional.
+  DeepLens and TEGLIE weights are optional since C11.
 - **Depends on:** D4
 - **Files:** `datasets/transforms.py`, `pipelines/*.py`, `train.py`
 - **Now:** each pipeline builds its own `ModelInputTransform` with a different scaling, size and band order.
@@ -234,7 +234,13 @@ C14, C15, C16, C17 can be done in parallel at any time.
   `load_finetuned` reloads it.
 
 ### C11. CMU DeepLens from scratch
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#17](https://github.com/SMesForoush/LensDetection/pull/17)). `--weights` is optional in `pipelines/deeplens.py` and `pipelines/teglie.py`.
+  Without it neither `load_keras_h5` nor `freeze_modules` runs, `--freeze_stages` > 0 is an error, the log says
+  `training ... from random initialisation`, and `system_info.json` records `"pretrained": null`. The input is the
+  `--input_preset` transform (default `thesis`, C9). `slurm/finetune.sh` takes `PRETRAINED` (default `0` = from
+  scratch; `1` adds the published weights). Smoke runs (PRISM, 100 per class, 2 epochs, no weights): DeepLens
+  3,557,281 trainable parameters, TEGLIE 3,193,889; both reload with `load_finetuned`. The `--weights` path still
+  loads and freezes as before.
 - **Files:** `pipelines/deeplens.py`, `slurm/finetune.sh`
 - **Now:** `--weights` is `required=True` and `load_keras_h5` is always called, so the model only fine-tunes.
 - **To do:** make `--weights` optional. Without it, skip `load_keras_h5` and `freeze_modules`, record

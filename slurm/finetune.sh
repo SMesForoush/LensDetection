@@ -37,6 +37,13 @@ TRAIN_DATA="${TRAIN_DATA:-prism}"
 # e.g.  INPUT_PRESET=native sbatch slurm/finetune.sh
 INPUT_PRESET="${INPUT_PRESET:-thesis}"
 if [ "$MODEL" = gravit ]; then INPUT_PRESET=native; fi
+# PRETRAINED picks the starting weights of TEGLIE and DeepLens (GraViT always loads its weights; LensNet and
+# EfficientNet never do):
+#   0 (default)  random initialisation, all layers trained (the thesis experiment)
+#   1            load the published Keras weights from WEIGHTS_DIR (pretrained side experiment; pair it with
+#                INPUT_PRESET=native, the input those weights expect)
+# e.g.  PRETRAINED=1 INPUT_PRESET=native sbatch slurm/finetune.sh
+PRETRAINED="${PRETRAINED:-0}"
 WEIGHTS_DIR="${WEIGHTS_DIR:-weights}"
 OUTPUT_DIR="$SCRATCH_DIR/finetune_${MODEL}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR" logs
@@ -49,16 +56,18 @@ case "$MODEL" in
                     --weights "$WEIGHTS_DIR/gravit/vit-gravit-c3/model.safetensors"
                     --finetune all) ;;
     teglie)
-        MODEL_ARGS=(--weights "$WEIGHTS_DIR/teglie/Lens Detector 15.h5") ;;
+        MODEL_ARGS=()
+        if [ "$PRETRAINED" = 1 ]; then MODEL_ARGS=(--weights "$WEIGHTS_DIR/teglie/Lens Detector 15.h5"); fi ;;
     deeplens)
-        MODEL_ARGS=(--weights "$WEIGHTS_DIR/lexactum/ground_cmu_deeplens_250epochs.h5") ;;
+        MODEL_ARGS=()
+        if [ "$PRETRAINED" = 1 ]; then MODEL_ARGS=(--weights "$WEIGHTS_DIR/lexactum/ground_cmu_deeplens_250epochs.h5"); fi ;;
     efficientnet)  # EfficientNet-B0 from random initialisation, no weights
         MODEL_ARGS=() ;;
     *)
         echo "Unknown model '$MODEL'"; exit 1 ;;
 esac
 
-echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: training $MODEL (train_data=$TRAIN_DATA, input_preset=$INPUT_PRESET) -> $OUTPUT_DIR"
+echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: training $MODEL (train_data=$TRAIN_DATA, input_preset=$INPUT_PRESET, pretrained=$PRETRAINED) -> $OUTPUT_DIR"
 nvidia-smi
 
 srun python3 -m "pipelines.$MODEL" \
