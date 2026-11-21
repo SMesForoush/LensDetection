@@ -281,7 +281,7 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 - **Done when:** a 2-epoch smoke run works and `load_finetuned` reloads the checkpoint.
 
 ### C13. One shared training recipe
-- **Status:** done (PR_LINK). The `build_arg_parser` defaults are the thesis recipe: cross-entropy with
+- **Status:** done ([SMesForoush/LensDetection#19](https://github.com/SMesForoush/LensDetection/pull/19)). The `build_arg_parser` defaults are the thesis recipe: cross-entropy with
   `--class_weighting none` and label smoothing 0, AdamW lr 1e-3, weight decay 1e-4, 1-epoch warm-up + cosine, batch
   64, at most 50 epochs, `--augment` on by default (`--no-augment`), early stopping (patience 10) and checkpoint
   selection on the validation loss (`SELECTION_RULE = "min_val_loss"`); `--min_specificity` is gone. LensNet,
