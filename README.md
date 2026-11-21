@@ -168,6 +168,25 @@ threshold plus ROC-AUC and PR-AUC for: `overall`; `per_source` (recall of `real_
 lenses + all non-lenses, `calibration` = calibration lenses + all non-lenses). Next to every PR-AUC are `prevalence`
 (lens fraction) and `pr_auc_random`, the PR-AUC of a random classifier, which equals the prevalence.
 
+### Error analysis of the real-data errors
+
+`scripts/error_analysis.py` prepares the structured error analysis (thesis section "Structured error analysis") from
+runs that `pipelines.evaluate_real` has scored. Point it at the run directories, or at a folder holding them:
+
+```bash
+python scripts/error_analysis.py results --output_dir results/error_analysis --cosmos_root cosmos_data \
+    --real_lens_dir mock-lens-modeling/real_cowls_lenses      # on the laptop
+```
+
+Runs are grouped by `model_name`. Per architecture it takes the seed with the median real-data ROC-AUC (the lower one
+for an even number of seeds), takes all its false negatives and its false positives at the frozen threshold (a random
+sample of 150 stratified by source when there are more, `--max_fp`, `--sample_seed`) and writes, to `--output_dir`:
+`gallery/<FP|FN>/<id>.png` (asinh RGB with R = F444W, G = F277W, B = (F115W + F150W)/2, plus the four bands, with no
+score shown), an empty `coding_sheet.csv` (id, source, error type, `p_lens_<model>` per architecture, primary and
+secondary category, notes; hide the score columns while coding), `error_categories.csv`, `sample.csv`,
+`selected_runs.csv`, and the cross-model overlap over all errors as `overlap_table.csv` (made by all models vs by only
+one) and `error_overlap.csv` (per image). `--skip_gallery` writes the tables without reading any image.
+
 ### Notes on the pretrained models
 
 - GraViT: `config.json` names the wrong architecture for pit, mlp-mixer and twins_*. CvT is a HuggingFace
