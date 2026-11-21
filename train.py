@@ -49,9 +49,9 @@ Quality Assurance:
 - Includes: corruption percentages, inpainting counts, rejection reasons
 - Enables reproducibility and validation of data preprocessing
 
-Usage on Roihu, PRISM simulations only (the default; see datasets/sources.py):
-python train.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5 \
-  --output_dir /scratch/ituomine/COSMOS-WEB-LENS/LensDetection/lensnet_prism --gpu
+Usage on the laptop (where every run happens; Roihu is not used; the data paths default to the laptop copies, see
+datasets/sources.py), PRISM simulations only (the default):
+python train.py --output_dir results/lensnet_prism --gpu
 
 Real COWLS lenses, look-alikes and hand-checked non-lenses, split by sky region:
 python train.py --train_data real --output_dir ... --gpu

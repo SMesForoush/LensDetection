@@ -1,5 +1,21 @@
 # LensDetection
 
+**Where it runs.** All training and evaluation runs on the laptop (Apple Silicon, `--gpu` uses MPS). There is no
+budget for CSC Roihu, so the Roihu material below (`slurm/`, `scripts/pack_for_laptop.py`) is kept only for reference
+and is not maintained; bringing it up to date is the optional task O26 in `TODO.md`. The data paths default to the
+laptop (`datasets/sources.py`), so runs need no path arguments:
+
+| Data | Default | Argument |
+|---|---|---|
+| PRISM | `~/aalto/thesis/prism/out/prism` | `--prism_dir` |
+| Real look-alikes and non-lenses | `~/aalto/thesis/LensDetection/cosmos_data` | `--cosmos_root` |
+| Real COWLS lenses | `~/aalto/thesis/LensDetection/mock-lens-modeling/real_cowls_lenses` | `--real_lens_dir` |
+
+The defaults are anchored at the home directory, so a git worktree of the repo reads the same (git-ignored) data as the
+main checkout. The lens default applies only while `--cosmos_root` is the default: with a `--cosmos_root` of your own,
+the lenses are read from it too, unless `--real_lens_dir` is given. The Roihu paths are kept in `datasets/sources.py`
+as `ROIHU_PRISM_DIR` and `ROIHU_COSMOS_ROOT`; `slurm/finetune.sh` passes them explicitly.
+
 ## Data and training from scratch
 
 `pipelines/lensnet.py` trains the LensNet baseline from scratch. `pipelines/deeplens.py` and `pipelines/teglie.py`
@@ -54,9 +70,10 @@ checked again. `LensDatasetMemoryEfficient` raises on a corrupted file instead o
 | `lookalike` | look-alikes (galaxies that resemble the COWLS lenses): 2,608 | 0 |
 | `real_nonlens` | hand-checked non-lenses: 2,146 | 0 |
 
-The files are read from `--cosmos_root` (default `/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling`, the
-manifest's `file` paths are relative to it). `--real_lens_dir`, `--lookalike_dir` and `--real_nonlens_dir` read a
-source from another folder instead, by file name.
+The files are read from `--cosmos_root` (the manifest's `file` paths are relative to it; default: the laptop's
+`cosmos_data`). `--real_lens_dir`, `--lookalike_dir` and `--real_nonlens_dir` read a source from another folder
+instead, by file name; the lenses default to the laptop's `mock-lens-modeling/real_cowls_lenses` (see the top). On
+Roihu (not used) the root was `/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling`, which holds all four sources.
 
 The manifest is built by `scripts/build_real_manifest.py` from the mock-lens-modeling sample lists
 (`samples/lookalikes/cache/index.csv`, `samples/benchmark_v1/regions_v2/tile_fold_table.csv`,
@@ -69,8 +86,8 @@ four AnomalyMatch lens candidates that were among the non-lenses (104781, 628424
 images within 13" of the validation or test region are dropped, so no training cutout shares pixels with a
 validation or test cutout.
 
-**PRISM simulations** (`--train_data prism|both`). `--prism_dir DIR` (default
-`/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5`) holds `cosmos_lens_*.npy` (`prism_lens`, label 1)
+**PRISM simulations** (`--train_data prism|both`). `--prism_dir DIR` (default: the laptop's
+`~/aalto/thesis/prism/out/prism`; on Roihu, not used, `/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5`) holds `cosmos_lens_*.npy` (`prism_lens`, label 1)
 and `cosmos_nonlens_*.npy` (`prism_nonlens`, label 0). They have no sky position and are split 70/15/15, grouped by
 `base_lens_id` from `DIR/cosmos_lens_training_catalog.csv`: the 25 variations of one simulated lens system always land
 in the same split. Non-lenses are split 70/15/15 within each `nonlens_mode`. The split depends only on `--split_seed`
@@ -82,12 +99,9 @@ lenses from 56 / 12 / 12 lens systems) at split seed 42. `--val_region` and `--t
 python -m pipelines.lensnet --augment --output_dir results/lensnet_prism --gpu              # PRISM only (default)
 python -m pipelines.lensnet --augment --train_data real --output_dir results/lensnet_real --gpu
 python -m pipelines.lensnet --augment --train_data both --output_dir results/lensnet_real_prism --gpu
-sbatch slurm/finetune.sh                       # MODEL (default deeplens) on PRISM only
-TRAIN_DATA=real sbatch slurm/finetune.sh       # on real data (TRAIN_DATA=both: real + PRISM)
-PRETRAINED=1 INPUT_PRESET=native sbatch slurm/finetune.sh   # DeepLens fine-tuned from the LEXACTUM weights
 ```
 
-**Running off Roihu.** `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
+**Copying data from Roihu (not used now).** The laptop already has the data. `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
 only). By default it packs the non-lenses, about 6.9 GB uncompressed. `--with_lenses` also packs the lens cutouts,
 `--prism_dir` the PRISM files and `--weights_dir` the pretrained weights. The script checks that every file
 exists and that the zip will fit before it writes anything.
@@ -98,8 +112,7 @@ python3 scripts/pack_for_laptop.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS
     --weights_dir weights --out /scratch/$USER/cosmos_laptop_data.zip
 # on the laptop
 rsync -P roihu:/scratch/$USER/cosmos_laptop_data.zip . && unzip cosmos_laptop_data.zip -d cosmos_data
-python -m pipelines.lensnet --train_data real --cosmos_root cosmos_data \
-    --real_lens_dir mock-lens-modeling/real_cowls_lenses --output_dir results/local --gpu
+python -m pipelines.lensnet --train_data real --output_dir results/local --gpu      # the default paths
 python -m pipelines.lensnet --prism_dir cosmos_data/prism --output_dir results/local_prism --gpu
 ```
 
@@ -119,7 +132,6 @@ rotations to the training images. `--dropout` (default 0.5) and the shared train
 
 ```bash
 python -m pipelines.lensnet --augment --output_dir results/lensnet_prism --gpu
-MODEL=lensnet sbatch slurm/finetune.sh
 ```
 
 `train.py` is the earlier LensNet script, kept as **legacy** so the pilot runs can be reproduced. It has its own loop
@@ -152,8 +164,7 @@ seed and split as `train.py`, so test results are directly comparable with LensN
 starts from PyTorch's default initialisation, every layer is trained, `--freeze_stages` is an error, and
 `system_info.json` records `"pretrained": null`. With the default `--input_preset thesis`, DeepLens then has
 3,557,281 trainable parameters (its dense head sees 9 x 9 x 512 features at 300 px instead of 3 x 3 x 512 at 101 px).
-GraViT always loads its weights. In `slurm/finetune.sh`, `PRETRAINED=1` adds the published weights for TEGLIE and
-DeepLens; the default `0` trains from scratch.
+GraViT always loads its weights.
 
 `pipelines/efficientnet.py` trains EfficientNet-B0 (Tan & Le 2019) from random initialisation through the same
 runner: timm's `efficientnet_b0` with `pretrained=False`, a 4-channel stem and a 2-logit head (4,010,398 parameters,
@@ -168,16 +179,19 @@ and the original `.h5` weights are read with `h5py`, so training does not need T
 ### Usage
 
 ```bash
-pip install --user -r requirements-finetune.txt   # if the pytorch module lacks timm/transformers/h5py/astropy
-bash scripts/download_weights.sh weights           # on a login node (add GraViT repo ids as extra args)
+.venv/bin/pip install -r requirements-finetune.txt
+bash scripts/download_weights.sh weights           # add GraViT repo ids as extra args
 
-MODEL=gravit   sbatch slurm/finetune.sh --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors
-MODEL=teglie PRETRAINED=1 INPUT_PRESET=native sbatch slurm/finetune.sh --freeze_stages 1
-MODEL=deeplens sbatch slurm/finetune.sh     # from scratch
-MODEL=efficientnet sbatch slurm/finetune.sh --augment   # from scratch, no weights
+python -m pipelines.deeplens --output_dir results/deeplens --gpu                 # from scratch
+python -m pipelines.efficientnet --augment --output_dir results/efficientnet --gpu   # from scratch, no weights
+python -m pipelines.teglie --weights "weights/teglie/Lens Detector 15.h5" --input_preset native --freeze_stages 1 \
+    --output_dir results/teglie_pretrained --gpu                               # fine-tuned (side experiment)
+python -m pipelines.gravit --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors \
+    --output_dir results/gravit --gpu
 ```
 
-Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
+`slurm/finetune.sh` runs the same pipelines as a Roihu job (`MODEL=`, `TRAIN_DATA=`, `PRETRAINED=`,
+`INPUT_PRESET=`), but it is not maintained (O26). See `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
 arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--prism_dir`,
 `--max_samples_per_class`, ...), plus:
 
@@ -220,8 +234,6 @@ them, if that file says it was chosen on validation and its best epoch matches t
 
 ```bash
 python -m pipelines.evaluate_real results/deeplens_prism --gpu     # a run directory, or a .pth file
-python -m pipelines.evaluate_real results/deeplens_prism --cosmos_root cosmos_data \
-    --real_lens_dir mock-lens-modeling/real_cowls_lenses --gpu      # on the laptop
 ```
 
 It writes `real_predictions.csv` (same columns as `test_predictions.csv`), `real_results.json`,
@@ -238,8 +250,7 @@ lenses + all non-lenses, `calibration` = calibration lenses + all non-lenses). N
 runs that `pipelines.evaluate_real` has scored. Point it at the run directories, or at a folder holding them:
 
 ```bash
-python scripts/error_analysis.py results --output_dir results/error_analysis --cosmos_root cosmos_data \
-    --real_lens_dir mock-lens-modeling/real_cowls_lenses      # on the laptop
+python scripts/error_analysis.py results --output_dir results/error_analysis
 ```
 
 Runs are grouped by `model_name`. Per architecture it takes the seed with the median real-data ROC-AUC (the lower one

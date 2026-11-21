@@ -1,8 +1,7 @@
 """External evaluation of a trained model on every real COSMOS-Web DR1 cutout (TODO C8).
 
     python -m pipelines.evaluate_real results/deeplens_prism --gpu
-    python -m pipelines.evaluate_real results/deeplens_prism/best_model.pth \
-        --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses
+    python -m pipelines.evaluate_real results/deeplens_prism/best_model.pth   # data paths default to the laptop
 
 The model, its input transform and its decision threshold are all frozen: they are read from the checkpoint
 (pipelines/load.py). The threshold is the one the training run chose on its own validation set; there is
