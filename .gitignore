@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .venv
 logs/
+
+file_qc.json
+
 zips/
 
 # Local data copies used for laptop runs (see README); too large for git

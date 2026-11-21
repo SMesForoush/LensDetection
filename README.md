@@ -17,7 +17,15 @@ The default used to be real data. Old command lines that relied on it now train 
 `--train_data real` to keep them as they were; the log warns when `--train_data` is not given. `--include_prism` is
 an old name for `--train_data both`. `system_info.json` and `test_results.json` record `train_data` and
 `split_seed`, and `test_results.json` also has `split_sizes` (images, lenses and sources per split).
-`datasets.sources.all_real_samples(args)` returns every real image, unsplit, for the evaluation on real data.
+`datasets.sources.all_real_samples(args)` returns every usable real image, unsplit, for the evaluation on real data.
+
+**Corrupted files.** Before splitting, `datasets/quality.py` checks every file and drops the ones that cannot be
+loaded, cannot be brought to 4×300×300, have more than 50 % NaN/inf pixels, or are all zero. The log prints
+`<source>: dropped N corrupted files of M` per source; `data_quality_report.json` lists each dropped file and its
+reason, and `test_results.json` has the counts under `dropped_corrupted`. Files with at most 50 % invalid pixels are
+kept and inpainted. The check reads each file once and caches the result in `file_qc.json` in the data directory
+(or `~/.cache/lensdetection/file_qc/` if that is not writable); a file whose size or modification time changes is
+checked again. `LensDatasetMemoryEfficient` raises on a corrupted file instead of returning an all-zero image.
 
 **Real COSMOS-Web DR1 images.** `datasets/cosmos_real_manifest.csv` lists them, with their sky region:
 
@@ -123,6 +131,9 @@ arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--
 ### Outputs (in `--output_dir`)
 
 `best_model.pth` (selected on validation F2 with `--min_specificity`), `last_model.pth`, `training_history.json`,
+`test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`,
+`data_quality_report.json` (dropped corrupted files), `finetune.log`.
+The decision threshold is tuned for F2 on the validation set and then applied to the test set.
 `test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`, `finetune.log`.
 The decision threshold is tuned for F2 on the validation set and then applied to the test set. It is also stored in
 `best_model.pth` (keys `threshold` and `threshold_rule`), by `train.py` too.

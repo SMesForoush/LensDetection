@@ -43,9 +43,12 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | File | Role |
 |---|---|
-| `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every real image, unsplit, for C8. |
+
+| `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every real image, unsplit, for C8. Both return `(samples, quality_report)`: corrupted files are dropped first (C14). |
+| `datasets/quality.py` | Finds corrupted files (unreadable, wrong shape, > 50 % NaN/inf, all zero) before training, cached per data directory in `file_qc.json` (C14). |
 | `pipelines/evaluate_real.py` | C8: scores all real images with a checkpoint at its frozen validation threshold and writes `real_predictions.csv` + `real_results.json`. |
 | `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
+
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
 | `pipelines/deeplens.py`, `teglie.py`, `gravit.py` | One script per model, built on `run_finetuning`. |
@@ -62,7 +65,7 @@ val 973 (56), test 940 (48), with 45 dropped.
 - **Never use test labels for any choice** (threshold, checkpoint, hyperparameter), and never use real-data labels for
   anything except the final evaluation.
 - Keep `--split_seed` fixed (default 42) across all final runs. Only `--seed` varies between repetitions.
-- Every run writes `system_info.json`, `training_history.json`, `test_results.json` and
+- Every run writes `system_info.json`, `training_history.json`, `test_results.json`, `data_quality_report.json` and
   `{validation,test}_predictions.csv` to `--output_dir`. Keep that contract, because later items read those files.
 
 ### Dependency order
@@ -171,7 +174,8 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **To do:**
   1. Input: a run directory (or `best_model.pth`), plus the data arguments (`--cosmos_root` and the `--real_*_dir`
      overrides).
-     Get the real images with `datasets.sources.all_real_samples(args)` (unsplit, no `--max_samples_per_class`).
+     Get the real images with `samples, quality_report = datasets.sources.all_real_samples(args)` (unsplit, no
+     `--max_samples_per_class`, corrupted files dropped).
   2. Load the model and its stored transform with `pipelines/load.py::load_finetuned`. LensNet from `train.py` has a
      different checkpoint format, so either handle both or do C10 first.
   3. Read the frozen threshold from the checkpoint. **There must be no threshold argument**, and the script must not
@@ -252,7 +256,12 @@ C14, C15, C16, C17 can be done in parallel at any time.
   architecture flags.
 
 ### C14. Drop corrupted files instead of zero images
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#10](https://github.com/SMesForoush/LensDetection/pull/10)). New `datasets/quality.py` checks every file in `collect_from_args`
+  and `all_real_samples` (before subsampling), cached per data directory in `file_qc.json`, and drops unreadable,
+  wrong-shape, > 50 % NaN/inf and all-zero files. Both runners log `dropped N corrupted files` per source, write
+  `data_quality_report.json` and add `dropped_corrupted` to `test_results.json`. `__getitem__` raises instead of
+  returning zeros. train.py's old sampled QC report at the end of a run is gone. Local data: 0 of 4,000 PRISM and 0 of
+  5,031 real files dropped.
 - **Files:** `datasets/base.py` (around lines 231–255 and 275), `datasets/sources.py`, possibly a check script
 - **Now:** an image with > 50 % invalid pixels, or one that fails to load, is returned as an all-zero tensor that keeps
   its label (line 275 even returns label 0).
