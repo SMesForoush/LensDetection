@@ -86,20 +86,21 @@ C14, C15, C16, C17 can be done in parallel at any time.
 ## Decisions (confirm with supervisor before coding the parts they affect)
 
 ### D1. Train on PRISM only; use real data only for evaluation
-- **Status:** open
+- **Status:** Done
 - **Affects:** C6, C8, C13, E19, W22, W24
 - **Question:** Confirm that the final experiment trains and validates only on PRISM and evaluates once on all real
   cutouts. The thesis RQs (`introduction.tex`, RQ1–RQ4) already assume this; the code currently does the opposite.
 - **Default if no answer:** yes. Everything below assumes it.
+- **Decision:** Will do the final experiments only on PRISM. keep the rest of experiments as just side experiments. 
 
 ### D2. What the baseline is
-- **Status:** open
+- **Status:** Done
 - **Affects:** C10, W24
 - **Question:** `literature.tex` says the baseline is "modelled on the compact, published CNN of Schaefer et al. (2018)".
   LensNet (`models/lensnet.py`) is a generic five-block VGG-style CNN, not that network. Either keep LensNet and
   rewrite the sentence, or port the Schaefer et al. CNN.
-- **Default:** keep LensNet and rewrite the sentence. It is less work and fits the rule not to over-engineer the
-  baseline.
+- **Decision:** keep LensNet and rewrite the sentence.
+
 
 ### D3. Threshold objective
 - **Status:** open
