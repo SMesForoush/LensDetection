@@ -41,6 +41,9 @@ def build_architecture(model_name, model_config):
     if model_name == "deeplens":
         from models.deeplens import CMUDeepLens
         return CMUDeepLens(**model_config)
+    if model_name == "efficientnet":
+        from models.efficientnet import build_efficientnet
+        return build_efficientnet(**model_config)
     raise ValueError(f"Unknown model '{model_name}'")
 
 

@@ -155,6 +155,11 @@ starts from PyTorch's default initialisation, every layer is trained, `--freeze_
 GraViT always loads its weights. In `slurm/finetune.sh`, `PRETRAINED=1` adds the published weights for TEGLIE and
 DeepLens; the default `0` trains from scratch.
 
+`pipelines/efficientnet.py` trains EfficientNet-B0 (Tan & Le 2019) from random initialisation through the same
+runner: timm's `efficientnet_b0` with `pretrained=False`, a 4-channel stem and a 2-logit head (4,010,398 parameters,
+`models/efficientnet.py`). It takes no weights, accepts only `--input_preset thesis`, and sets no per-model training
+defaults. `--dropout` (default 0.2) and `--drop_path_rate` (stochastic depth, default 0.2) follow the B0 paper values.
+
 TEGLIE and LEXACTUM are Keras models. They are ported to PyTorch (`models/teglie.py`, `models/deeplens.py`),
 and the original `.h5` weights are read with `h5py`, so training does not need TensorFlow.
 `scripts/verify_keras_ports.py` rebuilds the original Keras graphs and checks that the ports agree with them
@@ -169,6 +174,7 @@ bash scripts/download_weights.sh weights           # on a login node (add GraViT
 MODEL=gravit   sbatch slurm/finetune.sh --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors
 MODEL=teglie PRETRAINED=1 INPUT_PRESET=native sbatch slurm/finetune.sh --freeze_stages 1
 MODEL=deeplens sbatch slurm/finetune.sh     # from scratch
+MODEL=efficientnet sbatch slurm/finetune.sh --augment   # from scratch, no weights
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
@@ -183,7 +189,7 @@ arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--
   of their r, i, g, u order. Change this if the channel order is different.
 - Freezing: GraViT `--finetune head|half|all` (GraViT strategies 1/2/3). TEGLIE `--freeze_stages 0|1|2`
   (none, CNN backbone, backbone + encoder). DeepLens `--freeze_stages 0..6` (stem + residual groups). Both need
-  `--weights`.
+  `--weights`. EfficientNet trains every layer.
 - `--learning_rate` (backbone) and `--head_learning_rate`, `--augment` (flips + 90 degree rotations),
   `--resize_mode resize|center_crop` (`native` only).
 

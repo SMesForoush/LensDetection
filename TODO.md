@@ -53,11 +53,11 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. `ModelInputTransform.thesis_default()` is the shared D4 input (`--input_preset thesis`, default; C9). |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
-| `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py` | One script per model, built on `run_finetuning`. LensNet trains from scratch with the D4 input (C10). DeepLens and TEGLIE train from scratch without `--weights` (C11); GraViT always loads its weights. |
+| `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py`, `efficientnet.py` | One script per model, built on `run_finetuning`. LensNet (C10) and EfficientNet-B0 (C12) train from scratch with the D4 input. DeepLens and TEGLIE train from scratch without `--weights` (C11); GraViT always loads its weights. |
 | `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
 | `train.py` | **Legacy** LensNet loop that does not use `run_finetuning` (kept to reproduce the pilot runs). Use `pipelines/lensnet.py`. |
 | `scripts/gradcam.py` | Grad-CAM of the lens score for rows of a predictions CSV, from any checkpoint (moved out of `train.py` in C10, for E21). |
-| `models/*.py` | Architectures: `lensnet.py` (1,753,570 params), `deeplens.py` (3,557,281 at 300 px), `teglie.py` (3,193,889), `gravit.py`. |
+| `models/*.py` | Architectures: `lensnet.py` (1,753,570 params), `deeplens.py` (3,557,281 at 300 px), `teglie.py` (3,193,889), `efficientnet.py` (timm EfficientNet-B0, 4,010,398), `gravit.py`. |
 | `slurm/finetune.sh` | Roihu job: 1× GH200, `module load python-pytorch/2.13`. |
 | `../Master-thesis/sections/*.tex` | Thesis text (`data.tex`, `methodology.tex`, `literature.tex`, `introduction.tex`). |
 
@@ -251,7 +251,14 @@ C14, C15, C16, C17 can be done in parallel at any time.
   weights file and logs about 3.56 M trainable parameters.
 
 ### C12. EfficientNet-B0 pipeline
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#16](https://github.com/SMesForoush/LensDetection/pull/16)). `pipelines/efficientnet.py` + `models/efficientnet.py`:
+  timm `efficientnet_b0`, `pretrained=False`, `in_chans=4`, 2 logits, 4,010,398 parameters; `--dropout` and
+  `--drop_path_rate` default to the B0 paper's 0.2. Only `--input_preset thesis` (native is refused); no per-model
+  `set_defaults`, so C13 sets its recipe in `build_arg_parser`. `system_info.json` records `"pretrained": null`.
+  `load.py` rebuilds `"efficientnet"`. `slurm/finetune.sh` has an `efficientnet` case
+  (`MODEL=efficientnet sbatch slurm/finetune.sh --augment`). Smoke test (MPS, `--max_samples_per_class 100 --epochs 2 --augment`): about 12 s/epoch on 137
+  training images after the first, train loss 1.70 → 0.92; `load_finetuned` reproduces the saved test probabilities
+  to 2e-7.
 - **Files:** new `pipelines/efficientnet.py` (optionally `models/efficientnet.py`), `pipelines/load.py`,
   `slurm/finetune.sh`, `README.md`
 - **To do:** use `timm.create_model("efficientnet_b0", pretrained=False, in_chans=4, num_classes=2)`, which gives

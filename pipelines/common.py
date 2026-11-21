@@ -365,8 +365,9 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
     """Fine-tune `model` on the base dataset, select on validation F2, evaluate on test and save everything.
 
     Args:
-        model_name: 'gravit' | 'teglie' | 'deeplens' (used by pipelines/load.py to rebuild the model).
-        model: pretrained model with frozen parameters already set (requires_grad=False).
+        model_name: 'gravit' | 'teglie' | 'deeplens' | 'efficientnet' (used by pipelines/load.py to rebuild the model).
+        model: the model, pretrained with frozen parameters already set (requires_grad=False), or freshly
+            initialised (EfficientNet-B0).
         model_config: kwargs that rebuild the architecture (stored in the checkpoint).
         head_params: parameters of the classification head (get head_learning_rate).
         train_transform: ModelInputTransform for training; evaluation uses it without augmentation.
