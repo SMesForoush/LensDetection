@@ -32,7 +32,8 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.metrics import average_precision_score, fbeta_score, roc_auc_score
+from sklearn.metrics import (average_precision_score, fbeta_score, precision_recall_curve, roc_auc_score,
+                             roc_curve)
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -369,6 +370,8 @@ def binary_metrics(y_true, y_score, threshold=0.5):
         "recall": recall,
         "precision": precision,
         "specificity": tn / (tn + fp) if tn + fp else 0.0,
+        "fpr": fp / (fp + tn) if fp + tn else 0.0,
+        "prevalence": float(np.mean(y_true)) if len(y_true) else 0.0,
         "npv": tn / (tn + fn) if tn + fn else 0.0,
         "f1": 2 * precision * recall / (precision + recall + 1e-8),
         "f2": float(fbeta_score(y_true, y_pred, beta=2, zero_division=0)) if two_classes else 0.0,
@@ -376,6 +379,80 @@ def binary_metrics(y_true, y_score, threshold=0.5):
         "roc_auc": float(roc_auc_score(y_true, y_score)) if two_classes else 0.0,
         "confusion_matrix": {"TN": tn, "FP": fp, "FN": fn, "TP": tp},
     }
+
+
+# Bootstrap 95 % intervals over the evaluated images (C15). Resampling is stratified by class, so every replicate keeps
+# the lens and non-lens counts (and the prevalence) of the evaluated set; the threshold stays fixed.
+BOOTSTRAP_SAMPLES = 2000
+BOOTSTRAP_SEED = 0
+CI_METRICS = ("recall", "specificity", "fpr", "precision", "f1", "roc_auc", "pr_auc")
+
+
+def bootstrap_settings(n=BOOTSTRAP_SAMPLES, seed=BOOTSTRAP_SEED):
+    """How the `ci95` entries were computed, for the results files."""
+    return {"method": "percentile bootstrap, stratified by class", "level": 0.95, "n": n, "seed": seed,
+            "threshold": "fixed (the evaluated threshold)", "metrics": list(CI_METRICS)}
+
+
+def bootstrap_ci(y_true, y_score, threshold, n=BOOTSTRAP_SAMPLES, seed=BOOTSTRAP_SEED):
+    """95 % percentile intervals {metric: [low, high]} for CI_METRICS at a fixed `threshold`.
+
+    Lenses and non-lenses are resampled separately (with replacement, each to its own count). The metrics are defined
+    as in binary_metrics. Metrics that need both classes (precision, F1, ROC-AUC, PR-AUC; recall needs lenses,
+    specificity and FPR need non-lenses) are None when the evaluated set lacks that class.
+    """
+    y_true = np.asarray(y_true).astype(int)
+    y_score = np.asarray(y_score, dtype=float)
+    pos, neg = np.flatnonzero(y_true == 1), np.flatnonzero(y_true == 0)
+    if not len(y_true) or n <= 0:
+        return {k: None for k in CI_METRICS}
+    rng = np.random.default_rng(seed)
+    y_pred = y_score >= threshold
+    y_boot = np.r_[np.ones(len(pos), int), np.zeros(len(neg), int)]
+    values = {k: np.empty(n) for k in CI_METRICS}
+    for b in range(n):
+        i_pos, i_neg = rng.choice(pos, len(pos)), rng.choice(neg, len(neg))
+        tp, fp = int(y_pred[i_pos].sum()), int(y_pred[i_neg].sum())
+        fn, tn = len(pos) - tp, len(neg) - fp
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        values["recall"][b] = recall
+        values["precision"][b] = precision
+        values["specificity"][b] = tn / (tn + fp) if tn + fp else 0.0
+        values["fpr"][b] = fp / (fp + tn) if fp + tn else 0.0
+        values["f1"][b] = 2 * precision * recall / (precision + recall + 1e-8)
+        if len(pos) and len(neg):
+            s_boot = np.r_[y_score[i_pos], y_score[i_neg]]
+            values["roc_auc"][b] = roc_auc_score(y_boot, s_boot)
+            values["pr_auc"][b] = average_precision_score(y_boot, s_boot)
+    defined = {"recall": len(pos) > 0, "specificity": len(neg) > 0, "fpr": len(neg) > 0}
+    both = len(pos) > 0 and len(neg) > 0
+    return {k: ([float(q) for q in np.percentile(v, [2.5, 97.5])] if defined.get(k, both) else None)
+            for k, v in values.items()}
+
+
+def save_curves(output_dir, y_true, y_score, prefix=""):
+    """Write the ROC and PR curve points to `<prefix>roc_curve.csv` and `<prefix>pr_curve.csv` (C15).
+
+    roc_curve.csv: fpr, tpr, threshold (the first row, threshold inf, is the (0, 0) corner).
+    pr_curve.csv: recall, precision, threshold (the last row, recall 0 and precision 1, has no threshold).
+    A predicted lens is lens_probability >= threshold, as everywhere else. Nothing is written for a one-class set.
+    """
+    y_true = np.asarray(y_true).astype(int)
+    if len(set(y_true.tolist())) < 2:
+        return None
+    fpr, tpr, roc_t = roc_curve(y_true, y_score)
+    precision, recall, pr_t = precision_recall_curve(y_true, y_score)
+    paths = Path(output_dir) / f"{prefix}roc_curve.csv", Path(output_dir) / f"{prefix}pr_curve.csv"
+    pd.DataFrame({"fpr": fpr, "tpr": tpr, "threshold": roc_t}).to_csv(paths[0], index=False)
+    pd.DataFrame({"recall": recall, "precision": precision,
+                  "threshold": np.r_[pr_t, np.nan]}).to_csv(paths[1], index=False)
+    return paths
+
+
+def format_ci(ci, key):
+    """' [low, high]' for log lines, or '' when there is no interval."""
+    return f" [{ci[key][0]:.4f}, {ci[key][1]:.4f}]" if ci and ci.get(key) else ""
 
 
 # How the decision threshold is chosen (on validation only). Stored in best_model.pth and test_results.json so that
@@ -532,18 +609,23 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
                "best_epoch": int(ckpt["epoch"]), "selection": SELECTION_RULE,
                "threshold_selected_on": "validation", "threshold_rule": THRESHOLD_RULE,
                "validation": binary_metrics(y_val, s_val, threshold),
-               "test": binary_metrics(y_test, s_test, threshold),
-               "test_at_0.5": binary_metrics(y_test, s_test, 0.5)}
+               "test": {**binary_metrics(y_test, s_test, threshold), "ci95": bootstrap_ci(y_test, s_test, threshold)},
+               "test_at_0.5": binary_metrics(y_test, s_test, 0.5),
+               "bootstrap": bootstrap_settings()}
     with open(output_dir / "test_results.json", "w") as f:
         json.dump(results, f, indent=2)
     save_predictions(output_dir / "validation_predictions.csv", splits["val"][0], splits["val"][2], y_val, s_val, threshold)
     df = save_predictions(output_dir / "test_predictions.csv", splits["test"][0], splits["test"][2], y_test, s_test, threshold)
+    curves = save_curves(output_dir, y_test, s_test)
+    if curves:
+        logger.info(f"Test ROC and PR curve points saved to {curves[0].name} and {curves[1].name}")
 
     t = results["test"]
     logger.info("=" * 80)
-    logger.info(f"TEST RESULTS (threshold {threshold:.2f}, tuned for F2 on validation)")
-    for key in ("recall", "specificity", "precision", "f1", "f2", "pr_auc", "roc_auc", "acc"):
-        logger.info(f"  {key:12s}: {t[key]:.4f}")
+    logger.info(f"TEST RESULTS (threshold {threshold:.2f}, tuned for F2 on validation; "
+                f"[95 % stratified bootstrap interval, {BOOTSTRAP_SAMPLES} resamples])")
+    for key in ("recall", "specificity", "fpr", "precision", "f1", "f2", "pr_auc", "roc_auc", "acc", "prevalence"):
+        logger.info(f"  {key:12s}: {t[key]:.4f}{format_ci(t['ci95'], key)}")
     logger.info(f"  confusion   : {t['confusion_matrix']}")
     for source, g in df.groupby("data_source"):
         logger.info(f"  {source}: {len(g)} samples, accuracy {100 * g['correct'].mean():.2f}%")
