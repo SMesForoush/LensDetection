@@ -340,7 +340,7 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 - **Done when:** `test_results.json` contains `fpr`, `prevalence` and `ci95`, and the curve CSVs exist.
 
 ### C16. Multi-seed driver and aggregation
-- **Status:** done (PR link: TODO). `scripts/run_seeds.sh` (defaults: `lensnet deeplens efficientnet` × seeds `0 1 2`,
+- **Status:** done ([SMesForoush/LensDetection#21](https://github.com/SMesForoush/LensDetection/pull/21)). `scripts/run_seeds.sh` (defaults: `lensnet deeplens efficientnet` × seeds `0 1 2`,
   split seed 42, `--gpu`; `--models`, `--seeds`, `--split_seed`, `--results`, `--real` to also run
   `pipelines.evaluate_real`, `--cpu`, `--dry_run`; arguments after `--` go to every run and may not set `--seed`,
   `--split_seed` or `--output_dir`). It skips a (model, seed) with a `test_results.json` (and, with `--real`, with a
