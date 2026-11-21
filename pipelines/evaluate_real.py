@@ -11,6 +11,7 @@ the manifest is scored, unsplit and unsubsampled (datasets.sources.all_real_samp
 
 Writes, next to the checkpoint unless --output_dir is given:
     real_predictions.csv   one row per real image, same columns as the training run's test_predictions.csv
+    data_quality_report.json  the corrupted real files that were dropped (datasets/quality.py)
     real_results.json      metrics at the frozen threshold, plus the threshold-free ROC-AUC and PR-AUC:
         overall            all real images
         per_source         real_lens_confident, real_lens_calibration (recall), lookalike, real_nonlens (specificity, FPR)
@@ -30,6 +31,7 @@ import torch.nn as nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from datasets.quality import dropped_counts, save_report  # noqa: E402
 from datasets.sources import REAL_SOURCES, add_real_data_arguments, all_real_samples  # noqa: E402
 from pipelines.common import binary_metrics, make_loader, predict, save_predictions, select_device  # noqa: E402
 from pipelines.load import frozen_threshold, load_from_checkpoint, read_checkpoint  # noqa: E402
@@ -137,7 +139,8 @@ def main(argv=None):
         logger.warning(f"This model was trained with --train_data {train_data}: real images were in its training, "
                        f"validation and test splits, so this is NOT an external evaluation")
 
-    samples = all_real_samples(args, logger)
+    samples, quality_report = all_real_samples(args, logger)  # corrupted files dropped (datasets/quality.py)
+    logger.info(f"Data quality report saved to {save_report(quality_report, output_dir)}")
     paths = [s.path for s in samples]
     labels = [s.label for s in samples]
     sources = [s.source for s in samples]
@@ -156,7 +159,8 @@ def main(argv=None):
         "threshold": threshold, "threshold_rule": rule, "threshold_read_from": threshold_from,
         "transform": transform.config(), "real_manifest": str(args.real_manifest),
         "counts": {"n": len(samples), "lenses": int(sum(labels)), "nonlenses": len(labels) - int(sum(labels)),
-                   "sources": {s: sources.count(s) for s in REAL_SOURCES}},
+                   "sources": {s: sources.count(s) for s in REAL_SOURCES},
+                   "dropped_corrupted": dropped_counts(quality_report)},
         "loss": loss,
         **real_metrics(y_true, y_score, sources, threshold),
     }
