@@ -42,13 +42,19 @@ import pandas as pd
 
 from datasets.quality import drop_corrupted
 
-COSMOS_ROOT = "/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling"
+# Default data locations: the laptop, where every run happens (Roihu is not used; TODO.md O26). Anchored at the home
+# directory, not this file, so git worktrees of the repo find the same (git-ignored) data as the main checkout.
+LAPTOP_REPO = Path.home() / "aalto" / "thesis" / "LensDetection"
+COSMOS_ROOT = str(LAPTOP_REPO / "cosmos_data")  # holds the look-alikes and hand-checked non-lenses
+REAL_LENS_DIR = str(LAPTOP_REPO / "mock-lens-modeling" / "real_cowls_lenses")  # the COWLS lenses are not in COSMOS_ROOT
+PRISM_DIR = str(Path.home() / "aalto" / "thesis" / "prism" / "out" / "prism")
+ROIHU_COSMOS_ROOT = "/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling"  # not used; the manifest's layout
+ROIHU_PRISM_DIR = "/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5"  # not used
 REAL_MANIFEST = Path(__file__).resolve().parent / "cosmos_real_manifest.csv"
 REAL_SOURCES = ("real_lens_confident", "real_lens_calibration", "lookalike", "real_nonlens")
 DIR_ARG = {"real_lens_confident": "real_lens_dir", "real_lens_calibration": "real_lens_dir",
            "lookalike": "lookalike_dir", "real_nonlens": "real_nonlens_dir"}
 
-PRISM_DIR = "/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5"
 PRISM_FRACTIONS = (0.70, 0.15, 0.15)  # train / val / test
 TRAIN_DATA_MODES = ("prism", "real", "both")
 DEFAULT_TRAIN_DATA = "prism"
@@ -61,10 +67,12 @@ Sample = namedtuple("Sample", "path label source region near_regions group strat
 def add_real_data_arguments(parser):
     """Where the real images are: shared by add_data_arguments and pipelines/evaluate_real.py."""
     parser.add_argument("--cosmos_root", default=COSMOS_ROOT,
-                        help="Root that the manifest's file paths are relative to (mock-lens-modeling on Roihu)")
+                        help="Root that the manifest's file paths are relative to (default: the laptop's cosmos_data)")
     parser.add_argument("--real_manifest", default=str(REAL_MANIFEST),
                         help="CSV of the real images (scripts/build_real_manifest.py)")
-    parser.add_argument("--real_lens_dir", help="Folder of the COWLS lens cutouts (overrides --cosmos_root for lenses)")
+    parser.add_argument("--real_lens_dir",
+                        help="Folder of the COWLS lens cutouts (overrides --cosmos_root for lenses). Default: the "
+                             "laptop's mock-lens-modeling/real_cowls_lenses, but only while --cosmos_root is the default")
     parser.add_argument("--lookalike_dir", help="Folder of the look-alike cutouts (overrides --cosmos_root)")
     parser.add_argument("--real_nonlens_dir", help="Folder of the hand-checked non-lens cutouts (overrides --cosmos_root)")
     return parser
@@ -119,8 +127,13 @@ def uses_prism(train_data):
 
 
 def real_dirs(args):
-    """{source: folder} from the --real_lens_dir / --lookalike_dir / --real_nonlens_dir overrides."""
-    return {s: getattr(args, DIR_ARG[s]) for s in REAL_SOURCES}
+    """{source: folder} from the --real_lens_dir / --lookalike_dir / --real_nonlens_dir overrides.
+    With the default --cosmos_root (the laptop), the lenses come from REAL_LENS_DIR unless --real_lens_dir is given;
+    a --cosmos_root of your own (e.g. Roihu's full mock-lens-modeling) is used for the lenses too."""
+    dirs = {s: getattr(args, DIR_ARG[s]) for s in REAL_SOURCES}
+    if not args.real_lens_dir and args.cosmos_root == COSMOS_ROOT:
+        dirs["real_lens_confident"] = dirs["real_lens_calibration"] = REAL_LENS_DIR
+    return dirs
 
 
 def all_real_samples(args, logger=None):
