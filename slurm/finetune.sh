@@ -18,7 +18,10 @@ module load python-pytorch/2.13
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export HF_HUB_OFFLINE=1   # use the weights downloaded on the login node
 
-MODEL="deeplens"
+# The model is the first argument (default deeplens); the rest go to the pipeline, e.g.
+#   sbatch slurm/finetune.sh efficientnet --augment
+MODEL="${MODEL:-deeplens}"
+if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then MODEL="$1"; shift; fi
 SCRATCH_DIR="/scratch/ituomine/COSMOS-WEB-LENS/LensDetection"
 # TRAIN_DATA picks the data that trains, validates and tests the model (datasets/sources.py):
 #   prism (default)  PRISM simulations only; the real images are kept for the external evaluation
@@ -33,7 +36,7 @@ TRAIN_DATA="${TRAIN_DATA:-prism}"
 # INPUT_PRESET picks the input transform (datasets/transforms.py):
 #   thesis (default)  the one transform shared by every architecture: bands 0,1,2,3, 300x300, per-band unit_asinh
 #   native            the model's own published input (TEGLIE/DeepLens 2,3,1,0 at 101 px), for the pretrained side
-#                     experiment. GraViT only supports native.
+#                     experiment. GraViT only supports native; EfficientNet only supports thesis.
 # e.g.  INPUT_PRESET=native sbatch slurm/finetune.sh
 INPUT_PRESET="${INPUT_PRESET:-thesis}"
 if [ "$MODEL" = gravit ]; then INPUT_PRESET=native; fi
@@ -50,11 +53,13 @@ case "$MODEL" in
         MODEL_ARGS=(--weights "$WEIGHTS_DIR/teglie/Lens Detector 15.h5") ;;
     deeplens)
         MODEL_ARGS=(--weights "$WEIGHTS_DIR/lexactum/ground_cmu_deeplens_250epochs.h5") ;;
+    efficientnet)  # EfficientNet-B0 from random initialisation, no weights
+        MODEL_ARGS=() ;;
     *)
         echo "Unknown model '$MODEL'"; exit 1 ;;
 esac
 
-echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: fine-tuning $MODEL (train_data=$TRAIN_DATA, input_preset=$INPUT_PRESET) -> $OUTPUT_DIR"
+echo "Job $SLURM_JOB_ID on $SLURM_NODELIST: training $MODEL (train_data=$TRAIN_DATA, input_preset=$INPUT_PRESET) -> $OUTPUT_DIR"
 nvidia-smi
 
 srun python3 -m "pipelines.$MODEL" \
