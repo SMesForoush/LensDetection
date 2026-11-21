@@ -274,6 +274,29 @@ lenses + all non-lenses, `calibration` = calibration lenses + all non-lenses). N
 `per_tier` block also have `ci95`, the same stratified bootstrap intervals as in `test_results.json`. The curve points
 over all real images go to `real_roc_curve.csv` and `real_pr_curve.csv`.
 
+### Several seeds per model, and mean ± sd
+
+`scripts/run_seeds.sh` trains every model with every seed, one run after another on the laptop (`--gpu`, MPS), into
+`results/<model>/seed_<s>/`. Only `--seed` changes between runs; `--split_seed` (default 42) is shared, so every seed
+sees the same split. A (model, seed) whose `test_results.json` exists is skipped, so the loop can be stopped and
+started again with the same command. `--real` also scores each run on the real images with `pipelines.evaluate_real`.
+Everything after `--` goes to every training run. From a git worktree it uses the main checkout's `.venv`; set
+`PYTHON` to override.
+
+```bash
+scripts/run_seeds.sh --real                       # lensnet deeplens efficientnet x seeds 0 1 2 (decision D5)
+scripts/run_seeds.sh --models lensnet --seeds "0 1" --results results/smoke -- --max_samples_per_class 100 --epochs 2
+python scripts/aggregate_runs.py results          # or results/smoke
+```
+
+`scripts/aggregate_runs.py` reads every `test_results.json` and `real_results.json` under the folders it is given and
+writes, to `--output_dir` (default `<folder>/aggregate`): `metrics_long.csv` (model, seed, set, metric, value),
+`summary.csv` (mean, sample sd, min, max per model, set and metric), `runs.csv`, and one LaTeX `tabular` per set,
+`summary_<set>.tex` (booktabs, mean $\pm$ sd, `--tex_metrics`), for `\input` in the thesis. The sets are `prism_test`
+(only runs trained with `--train_data prism`), `real` (all real images), `real_confident` and `real_calibration` (the
+two lens tiers, each with all non-lenses). It prints the same table and warns about runs that cannot be averaged
+together: a repeated (model, seed), different split seeds, or training data other than PRISM.
+
 ### Error analysis of the real-data errors
 
 `scripts/error_analysis.py` prepares the structured error analysis (thesis section "Structured error analysis") from
