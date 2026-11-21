@@ -145,6 +145,11 @@ seed and split as `train.py`, so test results are directly comparable with LensN
 | `pipelines/teglie.py` | TEGLIE / Lens Detector 15, CNN + transformer encoder (Thuruthipilly et al. 2022; Grespan et al. 2024) | `Lens Detector 15.h5` (challenge sims) or `Rotated_Flipped_Transposed.h5` (after KiDS fine-tuning) | 4 bands (r, i, g, u), 101 x 101, clipped to [-100, 100] |
 | `pipelines/deeplens.py` | LEXACTUM CMU DeepLens (Magro et al. 2021) | Zenodo 4299924, `ground_cmu_deeplens_<N>epochs.h5` | 4 bands (R, I, G, U), 101 x 101, per-band ZScale |
 
+`pipelines/efficientnet.py` trains EfficientNet-B0 (Tan & Le 2019) from random initialisation through the same
+runner: timm's `efficientnet_b0` with `pretrained=False`, a 4-channel stem and a 2-logit head (4,010,398 parameters,
+`models/efficientnet.py`). It takes no weights, accepts only `--input_preset thesis`, and sets no per-model training
+defaults. `--dropout` (default 0.2) and `--drop_path_rate` (stochastic depth, default 0.2) follow the B0 paper values.
+
 TEGLIE and LEXACTUM are Keras models. They are ported to PyTorch (`models/teglie.py`, `models/deeplens.py`),
 and the original `.h5` weights are read with `h5py`, so training does not need TensorFlow.
 `scripts/verify_keras_ports.py` rebuilds the original Keras graphs and checks that the ports agree with them
@@ -159,6 +164,7 @@ bash scripts/download_weights.sh weights           # on a login node (add GraViT
 MODEL=gravit   sbatch slurm/finetune.sh --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors
 MODEL=teglie   sbatch slurm/finetune.sh --freeze_stages 1
 MODEL=deeplens sbatch slurm/finetune.sh
+MODEL=efficientnet sbatch slurm/finetune.sh --augment   # from scratch, no weights
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
@@ -171,7 +177,8 @@ arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--
   base channels are ordered blue to red. GraViT uses `3,2,1` (RGB); TEGLIE and DeepLens use `2,3,1,0`, the analogue
   of their r, i, g, u order. Change this if the channel order is different.
 - Freezing: GraViT `--finetune head|half|all` (GraViT strategies 1/2/3). TEGLIE `--freeze_stages 0|1|2`
-  (none, CNN backbone, backbone + encoder). DeepLens `--freeze_stages 0..6` (stem + residual groups).
+  (none, CNN backbone, backbone + encoder). DeepLens `--freeze_stages 0..6` (stem + residual groups). EfficientNet
+  trains every layer.
 - `--learning_rate` (backbone) and `--head_learning_rate`, `--augment` (flips + 90 degree rotations),
   `--resize_mode resize|center_crop` (`native` only).
 
