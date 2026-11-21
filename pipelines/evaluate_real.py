@@ -17,7 +17,9 @@ Writes, next to the checkpoint unless --output_dir is given:
         per_source         real_lens_confident, real_lens_calibration (recall), lookalike, real_nonlens (specificity, FPR)
         per_tier           confident lenses + all non-lenses, calibration lenses + all non-lenses
     Every block with both classes has `prevalence` (lens fraction) and `pr_auc_random` (= prevalence, the PR-AUC of a
-    random classifier) next to its PR-AUC.
+    random classifier) next to its PR-AUC, and `ci95`: stratified bootstrap 95 % intervals for recall, specificity,
+    FPR, precision, F1, ROC-AUC and PR-AUC (settings under the top-level `bootstrap` key).
+    real_roc_curve.csv, real_pr_curve.csv  ROC and PR curve points over all real images (pipelines/common.py::save_curves)
 """
 import argparse
 import json
@@ -33,7 +35,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.quality import dropped_counts, save_report  # noqa: E402
 from datasets.sources import REAL_SOURCES, add_real_data_arguments, all_real_samples  # noqa: E402
-from pipelines.common import binary_metrics, make_loader, predict, save_predictions, select_device  # noqa: E402
+from pipelines.common import (BOOTSTRAP_SAMPLES, binary_metrics, bootstrap_ci, bootstrap_settings,  # noqa: E402
+                              format_ci, make_loader, predict, save_curves, save_predictions, select_device)
 from pipelines.load import frozen_threshold, load_from_checkpoint, read_checkpoint  # noqa: E402
 
 LENS_SOURCES = ("real_lens_confident", "real_lens_calibration")
@@ -76,13 +79,12 @@ def resolve_checkpoint(run):
     return path
 
 
-def with_baseline(m, y_true):
-    """binary_metrics plus FPR, prevalence and the PR-AUC of a random classifier (= prevalence)."""
-    cm = m["confusion_matrix"]
-    prevalence = float(np.mean(y_true)) if len(y_true) else 0.0
-    return {**m, "n": int(len(y_true)), "lenses": int(np.sum(y_true)),
-            "fpr": cm["FP"] / (cm["FP"] + cm["TN"]) if cm["FP"] + cm["TN"] else 0.0,
-            "prevalence": prevalence, "pr_auc_random": prevalence}
+def with_baseline(y_true, y_score, threshold):
+    """binary_metrics (which has FPR and prevalence) plus counts, the PR-AUC of a random classifier (= prevalence)
+    and the stratified bootstrap 95 % intervals (`ci95`)."""
+    m = binary_metrics(y_true, y_score, threshold)
+    return {**m, "n": int(len(y_true)), "lenses": int(np.sum(y_true)), "pr_auc_random": m["prevalence"],
+            "ci95": bootstrap_ci(y_true, y_score, threshold)}
 
 
 def source_metrics(y_true, y_score, threshold):
@@ -106,7 +108,7 @@ def real_metrics(y_true, y_score, sources, threshold):
         raise ValueError(f"Unexpected sources {sorted(set(sources) - set(REAL_SOURCES))}")
     nonlens = np.isin(sources, NONLENS_SOURCES)
     results = {
-        "overall": with_baseline(binary_metrics(y_true, y_score, threshold), y_true),
+        "overall": with_baseline(y_true, y_score, threshold),
         "per_source": {s: source_metrics(y_true[sources == s], y_score[sources == s], threshold)
                        for s in REAL_SOURCES},
         "per_tier": {},
@@ -114,7 +116,7 @@ def real_metrics(y_true, y_score, sources, threshold):
     for tier, lens_source in TIERS.items():
         keep = nonlens | (sources == lens_source)
         results["per_tier"][tier] = {"sources": [lens_source, *NONLENS_SOURCES],
-                                     **with_baseline(binary_metrics(y_true[keep], y_score[keep], threshold), y_true[keep])}
+                                     **with_baseline(y_true[keep], y_score[keep], threshold)}
     return results
 
 
@@ -162,18 +164,20 @@ def main(argv=None):
                    "sources": {s: sources.count(s) for s in REAL_SOURCES},
                    "dropped_corrupted": dropped_counts(quality_report)},
         "loss": loss,
+        "bootstrap": bootstrap_settings(),
         **real_metrics(y_true, y_score, sources, threshold),
     }
     with open(output_dir / "real_results.json", "w") as f:
         json.dump(results, f, indent=2)
     save_predictions(output_dir / "real_predictions.csv", paths, sources, y_true, y_score, threshold)
+    save_curves(output_dir, y_true, y_score, prefix="real_")
 
     o = results["overall"]
     logger.info("=" * 80)
     logger.info(f"REAL DATA ({o['n']} images, {o['lenses']} lenses, prevalence {o['prevalence']:.4f}), "
-                f"threshold {threshold:.4f}")
+                f"threshold {threshold:.4f} [95 % stratified bootstrap interval, {BOOTSTRAP_SAMPLES} resamples]")
     for key in ("recall", "specificity", "fpr", "precision", "f1", "roc_auc", "pr_auc", "pr_auc_random"):
-        logger.info(f"  {key:14s}: {o[key]:.4f}")
+        logger.info(f"  {key:14s}: {o[key]:.4f}{format_ci(o['ci95'], key)}")
     logger.info(f"  confusion     : {o['confusion_matrix']}")
     for source, m in results["per_source"].items():
         if not m["n"]:
@@ -185,7 +189,8 @@ def main(argv=None):
         logger.info(f"  tier {tier:11s}: recall {m['recall']:.4f}, precision {m['precision']:.4f}, "
                     f"ROC-AUC {m['roc_auc']:.4f}, PR-AUC {m['pr_auc']:.4f} (random {m['pr_auc_random']:.4f})")
     logger.info("=" * 80)
-    logger.info(f"Wrote {output_dir / 'real_results.json'} and {output_dir / 'real_predictions.csv'}")
+    logger.info(f"Wrote {output_dir / 'real_results.json'}, {output_dir / 'real_predictions.csv'} and the "
+                f"real_roc_curve.csv / real_pr_curve.csv curve points")
     return results
 
 

@@ -58,12 +58,12 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every real image, unsplit, for C8. Both return `(samples, quality_report)`: corrupted files are dropped first (C14). |
 | `datasets/quality.py` | Finds corrupted files (unreadable, wrong shape, > 50 % NaN/inf, all zero) before training, cached per data directory in `file_qc.json` (C14). |
-| `pipelines/evaluate_real.py` | C8: scores all real images with a checkpoint at its frozen validation threshold and writes `real_predictions.csv` + `real_results.json`. |
+| `pipelines/evaluate_real.py` | C8: scores all real images with a checkpoint at its frozen validation threshold and writes `real_predictions.csv` + `real_results.json` (with bootstrap `ci95`, C15) + `real_{roc,pr}_curve.csv`. |
 | `scripts/error_analysis.py` | C17: picks the median-ROC-AUC seed per architecture, samples its real-data FP/FN, renders a blind gallery and writes an empty coding sheet plus the cross-model overlap table. |
 | `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
 
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. `ModelInputTransform.thesis_default()` is the shared D4 input (`--input_preset thesis`, default; C9). |
-| `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`, whose defaults are the thesis training recipe (C13); `parse_args_with_recipe` switches pretrained runs to `FINETUNE_RECIPE`. |
+| `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics` (with FPR and prevalence), `bootstrap_ci` and `save_curves` (C15), `best_f2_threshold`, `save_predictions` and `build_arg_parser`, whose defaults are the thesis training recipe (C13); `parse_args_with_recipe` switches pretrained runs to `FINETUNE_RECIPE`. |
 | `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py`, `efficientnet.py` | One script per model, built on `run_finetuning`. LensNet (C10) and EfficientNet-B0 (C12) train from scratch with the D4 input. DeepLens and TEGLIE train from scratch without `--weights` (C11); GraViT always loads its weights. |
 | `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
 | `train.py` | **Legacy** LensNet loop that does not use `run_finetuning` (kept to reproduce the pilot runs). Use `pipelines/lensnet.py`. |
@@ -327,7 +327,17 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 - **Done when:** runs log `dropped N corrupted files` per source, and no all-zero tensors reach the model.
 
 ### C15. Missing metrics: FPR, bootstrap intervals, curves
-- **Status:** open
+- **Status:** done (branch `claude/c15-todo-51354a`, PR link to follow). `binary_metrics` returns `fpr` and
+  `prevalence` (so every metrics block has them; `evaluate_real.with_baseline` no longer computes its own).
+  `bootstrap_ci(y_true, y_score, threshold, n=2000, seed=0)` in `pipelines/common.py` resamples lenses and non-lenses
+  separately at the fixed threshold and returns `{metric: [low, high]}` (2.5/97.5 percentiles) for recall,
+  specificity, FPR, precision, F1, ROC-AUC and PR-AUC; a metric whose class is missing is `null`. It is stored as
+  `test.ci95` in `test_results.json` and as `ci95` in the `overall` and `per_tier` blocks of `real_results.json`; both
+  files record the settings under `bootstrap`. `save_curves` writes `roc_curve.csv` (`fpr,tpr,threshold`) and
+  `pr_curve.csv` (`recall,precision,threshold`) for the test set, and `evaluate_real` writes `real_roc_curve.csv` /
+  `real_pr_curve.csv`. The logged test and real results show the intervals. Legacy `train.py` is unchanged. Smoke run
+  (LensNet, 100 per class, 2 epochs, MPS): all files written; the bootstrap adds about 1 s per run on the test split
+  and about 8 s to `evaluate_real` (3 blocks of 5,031 images).
 - **Files:** `pipelines/common.py::binary_metrics`, `run_finetuning`, and C8's script
 - **To do:**
   1. Add `"fpr": fp / (fp + tn)` and `"prevalence": mean(y_true)` to `binary_metrics`.
