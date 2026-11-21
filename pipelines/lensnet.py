@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Train the LensNet baseline (models/lensnet.py) from random initialisation with the shared runner.
 
-    python -m pipelines.lensnet --output_dir ... --augment --gpu [--train_data prism|real|both --prism_dir ...]
+    python -m pipelines.lensnet --output_dir ... --gpu [--no-augment --train_data prism|real|both --prism_dir ...]
 
 LensNet is a five-block VGG-style CNN (1,753,570 parameters) with global average pooling, so it takes any input size.
-It goes through pipelines/common.py::run_finetuning like the other models: same data, split, loss, optimiser,
-schedule, early stopping, validation threshold, outputs and checkpoint format (pipelines/load.py reloads it).
+It goes through pipelines/common.py::run_finetuning like the other models: same data, split, training recipe (C13:
+loss, optimiser, schedule, augmentation, early stopping), validation threshold, outputs and checkpoint format
+(pipelines/load.py reloads it).
 There are no pretrained weights.
 
 Input (decision D4 in TODO.md): all four bands in their natural order (F115W, F150W, F277W, F444W), 300 x 300 px,
@@ -19,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.transforms import ModelInputTransform, parse_bands  # noqa: E402
 from models.lensnet import LensNet  # noqa: E402
-from pipelines.common import build_arg_parser, run_finetuning, set_random_seeds, setup_logging  # noqa: E402
+from pipelines.common import (build_arg_parser, parse_args_with_recipe, run_finetuning,  # noqa: E402
+                              set_random_seeds, setup_logging)
 
 
 def build_model(cfg):
@@ -49,9 +51,8 @@ def parse_args(argv=None):
     g.add_argument("--low_pct", type=float, default=0.5, help="Lower percentile mapped to 0 (unit_* scalings)")
     g.add_argument("--high_pct", type=float, default=99.5, help="Upper percentile mapped to 1 (unit_* scalings)")
     g.add_argument("--asinh_softening", type=float, default=0.1, help="asinh softening (unit_asinh)")
-    # From scratch, so there is no backbone/head learning-rate split; the training recipe is the shared default.
-    p.set_defaults(bands="0,1,2,3")
-    return p.parse_args(argv)
+    # From scratch, so the training recipe is the shared thesis default (C13); no per-model overrides.
+    return parse_args_with_recipe(p, argv)
 
 
 def main(argv=None):
@@ -60,7 +61,7 @@ def main(argv=None):
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     logger = setup_logging(args.output_dir, "train_lensnet")
 
-    bands = parse_bands(args.bands)
+    bands = parse_bands(args.bands or "0,1,2,3")
     model_config = dict(num_classes=2, dropout=args.dropout, in_channels=len(bands))
     model = build_model(model_config)
     logger.info("LensNet from random initialisation (no pretrained weights)")

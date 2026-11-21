@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.transforms import parse_bands  # noqa: E402
 from models.deeplens import CMUDeepLens, load_keras_h5  # noqa: E402
-from pipelines.common import (build_arg_parser, build_input_transform, freeze_modules, run_finetuning,  # noqa: E402
-                              set_random_seeds, setup_logging)
+from pipelines.common import (build_arg_parser, build_input_transform, freeze_modules,  # noqa: E402
+                              parse_args_with_recipe, run_finetuning, set_random_seeds, setup_logging)
 
 NATIVE_BANDS, NATIVE_SIZE = "2,3,1,0", 101  # LEXACTUM: R, I, G, U slots at 101x101
 
@@ -45,9 +45,10 @@ def parse_args(argv=None):
                    help="Freeze the stem + first N-1 residual groups (0 = train all, 6 = head only); needs --weights")
     g.add_argument("--dropout", type=float, default=0.0, help="Dropout before the dense head (original: none)")
     g.add_argument("--zscale_contrast", type=float, default=0.25, help="--input_preset native only")
-    # Original training: Adam (lr 1e-3), binary cross-entropy, batch 8
-    p.set_defaults(learning_rate=1e-4, weight_decay=1e-4, batch_size=64, epochs=50)
-    args = p.parse_args(argv)
+    # From scratch: the shared thesis recipe (C13). With --weights: the finetune recipe plus these values.
+    # (Original LEXACTUM training: Adam, lr 1e-3, binary cross-entropy, batch 8.)
+    args = parse_args_with_recipe(p, argv, pretrained=lambda a: bool(a.weights),
+                                  model_finetune=dict(weight_decay=1e-4, epochs=50))
     if args.freeze_stages and not args.weights:
         p.error("--freeze_stages needs --weights: freezing randomly initialised layers is never wanted")
     return args

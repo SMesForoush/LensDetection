@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.transforms import parse_bands  # noqa: E402
 from models.gravit import classifier_parameters, load_gravit, set_gravit_trainable  # noqa: E402
-from pipelines.common import (build_arg_parser, build_input_transform, run_finetuning, set_random_seeds,  # noqa: E402
-                              setup_logging)
+from pipelines.common import (build_arg_parser, build_input_transform, parse_args_with_recipe,  # noqa: E402
+                              run_finetuning, set_random_seeds, setup_logging)
 
 
 def parse_args(argv=None):
@@ -33,9 +33,11 @@ def parse_args(argv=None):
                    help="Per-band intensity stretch to [0, 1] before ImageNet normalisation")
     g.add_argument("--low_pct", type=float, default=0.5)
     g.add_argument("--high_pct", type=float, default=99.5)
-    p.set_defaults(input_preset="native", learning_rate=2e-5, head_learning_rate=1e-3, weight_decay=0.05,
-                   batch_size=64, epochs=30, warmup_epochs=2)
-    return p.parse_args(argv)
+    p.set_defaults(input_preset="native")
+    # Always pretrained, so always the finetune recipe (a side experiment), with GraViT's own values on top.
+    return parse_args_with_recipe(p, argv, pretrained=lambda a: True,
+                                  model_finetune=dict(learning_rate=2e-5, head_learning_rate=1e-3, weight_decay=0.05,
+                                                      epochs=30, warmup_epochs=2))
 
 
 def main(argv=None):

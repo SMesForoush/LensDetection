@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datasets.transforms import parse_bands  # noqa: E402
 from models.teglie import LensDetector15, load_keras_h5  # noqa: E402
-from pipelines.common import (build_arg_parser, build_input_transform, freeze_modules, run_finetuning,  # noqa: E402
-                              set_random_seeds, setup_logging)
+from pipelines.common import (build_arg_parser, build_input_transform, freeze_modules,  # noqa: E402
+                              parse_args_with_recipe, run_finetuning, set_random_seeds, setup_logging)
 
 NATIVE_BANDS, NATIVE_SIZE = "2,3,1,0", 101  # TEGLIE: r, i, g, u slots at 101x101
 
@@ -51,9 +51,10 @@ def parse_args(argv=None):
                         "original TEGLIE clip at +-1e-9 after multiplying by --flux_scale")
     g.add_argument("--clip_pct", type=float, default=99.5, help="--input_preset native only")
     g.add_argument("--flux_scale", type=float, default=1.0, help="--input_preset native only")
-    # Original training: Adam, lr 1e-4 with exponential decay, binary cross-entropy, l2(0.01) on conv/attention
-    p.set_defaults(learning_rate=1e-4, weight_decay=1e-2, batch_size=64, epochs=50, min_epochs=20)
-    args = p.parse_args(argv)
+    # From scratch: the shared thesis recipe (C13). With --weights: the finetune recipe plus these values.
+    # (Original TEGLIE training: Adam, lr 1e-4 with exponential decay, binary cross-entropy, l2(0.01).)
+    args = parse_args_with_recipe(p, argv, pretrained=lambda a: bool(a.weights),
+                                  model_finetune=dict(epochs=50, min_epochs=20))
     if args.freeze_stages and not args.weights:
         p.error("--freeze_stages needs --weights: freezing randomly initialised layers is never wanted")
     return args

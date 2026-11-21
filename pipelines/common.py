@@ -1,15 +1,16 @@
-"""Shared fine-tuning machinery for the pretrained lens-finder pipelines.
+"""Shared training machinery for every lens-finder pipeline (LensNet, DeepLens, EfficientNet-B0, TEGLIE, GraViT).
 
-Mirrors train.py so results are directly comparable with LensNet:
 - same data sources and split (datasets/sources.py): --train_data prism (default) | real | both; PRISM 70/15/15
   grouped by base lens system, real images by sky region
 - LensDatasetMemoryEfficient (inpainting + outlier clipping) as the base dataset
-- class-weighted cross-entropy with label smoothing, AdamW, AMP, gradient clipping
-- model selection on validation F2 subject to a minimum specificity, early stopping
-
-Differences from train.py:
+- one training recipe for every from-scratch run (C13 in TODO.md, the `thesis` recipe = the build_arg_parser
+  defaults): cross-entropy without class weights or label smoothing, AdamW (lr 1e-3, weight decay 1e-4), 1 epoch of
+  linear warm-up then cosine decay, batch 64, at most 50 epochs, D4 flips/rotations on, PyTorch's default init
+- model selection and early stopping on the validation loss: the lowest-loss epoch is kept, patience 10
 - the decision threshold is tuned on the *validation* set and then applied to the test set
-- pretrained backbones get their own (lower) learning rate; frozen BatchNorm layers stay in eval mode
+- pretrained runs (--weights, GraViT) use the `finetune` recipe instead (FINETUNE_RECIPE plus each model's own
+  overrides, see parse_args_with_recipe): a side experiment, labelled as such in system_info.json
+- pretrained backbones may get their own learning rate; frozen BatchNorm layers stay in eval mode
 - checkpoints store everything needed to rebuild the model and its input transform (see pipelines/load.py)
 
 Models may return 1 logit (sigmoid models: TEGLIE, DeepLens) or 2 logits (GraViT). A single logit z is
@@ -60,22 +61,30 @@ def build_arg_parser(description):
                                    "(--input_preset native only; default: the model's published order)")
     d.add_argument("--resize_mode", choices=["resize", "center_crop"], default="resize",
                    help="How the 300x300 cutouts are brought to the model's input size (--input_preset native only)")
-    d.add_argument("--augment", action="store_true", help="Random flips + 90 degree rotations on the training set")
+    d.add_argument("--augment", action=argparse.BooleanOptionalAction, default=True,
+                   help="Random flips + 90 degree rotations (the D4 group) on the training set")
 
-    t = p.add_argument_group("training")
+    # Defaults = the thesis recipe for from-scratch runs (C13). Pretrained runs override some of them through
+    # parse_args_with_recipe (FINETUNE_RECIPE + per-model values); nothing else should call set_defaults on these.
+    t = p.add_argument_group("training (defaults: the shared thesis recipe; pretrained runs use the finetune recipe)")
     t.add_argument("--batch_size", type=int, default=64)
-    t.add_argument("--epochs", type=int, default=30)
-    t.add_argument("--learning_rate", type=float, default=1e-4, help="LR of the pretrained backbone")
+    t.add_argument("--epochs", type=int, default=50, help="Maximum number of epochs")
+    t.add_argument("--learning_rate", type=float, default=1e-3,
+                   help="Peak LR (of the backbone, if --head_learning_rate is set)")
     t.add_argument("--head_learning_rate", type=float, help="LR of the classification head (default: learning_rate)")
-    t.add_argument("--weight_decay", type=float, default=1e-2)
+    t.add_argument("--weight_decay", type=float, default=1e-4, help="AdamW (decoupled) weight decay")
     t.add_argument("--warmup_epochs", type=int, default=1, help="Linear LR warm-up before cosine decay")
     t.add_argument("--min_lr_ratio", type=float, default=0.01, help="Final LR as a fraction of the initial LR")
-    t.add_argument("--label_smoothing", type=float, default=0.1)
-    t.add_argument("--lens_weight_multiplier", type=float, default=1.0)
+    t.add_argument("--class_weighting", choices=["none", "balanced"], default="none",
+                   help="none: plain cross-entropy (PRISM is 1:1). balanced: weight each class by "
+                        "n / (2 * n_class) in the training split")
+    t.add_argument("--label_smoothing", type=float, default=0.0)
+    t.add_argument("--lens_weight_multiplier", type=float, default=1.0,
+                   help="Extra factor on the lens-class loss weight (1 = none)")
     t.add_argument("--grad_clip", type=float, default=1.0, help="0 disables clipping")
     t.add_argument("--accumulation_steps", type=int, default=1)
-    t.add_argument("--min_specificity", type=float, default=0.4, help="Min val specificity for model selection")
-    t.add_argument("--early_stop_patience", type=int, default=10)
+    t.add_argument("--early_stop_patience", type=int, default=10,
+                   help="Stop after this many epochs without a lower validation loss")
     t.add_argument("--min_epochs", type=int, default=0,
                    help="Never stop early before this many epochs have been trained")
     t.add_argument("--checkpoint_freq", type=int, default=0, help="Also save every N epochs (0 = off)")
@@ -89,6 +98,30 @@ def build_arg_parser(description):
     s.add_argument("--mixed_precision", action="store_true", default=True)
     s.add_argument("--no-mixed_precision", dest="mixed_precision", action="store_false")
     return p
+
+
+# The training recipes. `thesis` is the build_arg_parser defaults above (C13), used by every from-scratch run.
+# `finetune` is used only when a run starts from pretrained weights (the side experiment): it restores the settings
+# the pipelines used before C13, and each model adds its own published fine-tuning values on top (`model_finetune`).
+RECIPES = ("thesis", "finetune")
+FINETUNE_RECIPE = dict(learning_rate=1e-4, weight_decay=1e-2, epochs=30, label_smoothing=0.1,
+                       class_weighting="balanced")
+
+
+def parse_args_with_recipe(p, argv=None, pretrained=None, model_finetune=None):
+    """Parse `argv` with the thesis recipe, or with the finetune recipe when the run is pretrained.
+
+    pretrained: callable(namespace) -> bool, evaluated on a first parse (e.g. `lambda a: bool(a.weights)`).
+    model_finetune: the model's own finetune-recipe defaults, applied on top of FINETUNE_RECIPE.
+    Arguments given on the command line always win. The chosen recipe is stored as `args.recipe`.
+    """
+    first, _ = p.parse_known_args(argv)
+    recipe = "finetune" if pretrained is not None and pretrained(first) else "thesis"
+    if recipe == "finetune":
+        p.set_defaults(**{**FINETUNE_RECIPE, **(model_finetune or {})})
+    args = p.parse_args(argv)
+    args.recipe = recipe
+    return args
 
 
 # --------------------------------------------------------------------------------------
@@ -235,6 +268,28 @@ def build_scheduler(optimizer, args):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, factor)
 
 
+def class_weights(train_labels, class_weighting="none", lens_weight_multiplier=1.0):
+    """Cross-entropy class weights [non-lens, lens], or None for the plain (unweighted) loss."""
+    if class_weighting == "balanced":
+        counts = np.bincount(np.asarray(train_labels, dtype=int), minlength=2)
+        weights = [len(train_labels) / (2 * max(c, 1)) for c in counts]
+    elif class_weighting == "none":
+        weights = [1.0, 1.0]
+    else:
+        raise ValueError(f"Unknown class weighting '{class_weighting}'")
+    weights[1] *= lens_weight_multiplier
+    return None if weights == [1.0, 1.0] else torch.tensor(weights, dtype=torch.float)
+
+
+def build_criterion(train_labels, args, device, logger=None):
+    weights = class_weights(train_labels, args.class_weighting, args.lens_weight_multiplier)
+    if logger:
+        logger.info(f"Loss: cross-entropy, class weights: {'none' if weights is None else weights.numpy()} "
+                    f"(--class_weighting {args.class_weighting}), label smoothing: {args.label_smoothing}")
+    return nn.CrossEntropyLoss(weight=None if weights is None else weights.to(device),
+                               label_smoothing=args.label_smoothing)
+
+
 def make_grad_scaler(enabled):
     if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
         try:
@@ -327,6 +382,8 @@ def binary_metrics(y_true, y_score, threshold=0.5):
 # pipelines/evaluate_real.py applies the same frozen threshold to the real images. Change it together with
 # best_f2_threshold once decision D3 (TODO.md) is settled.
 THRESHOLD_RULE = "max_f2_on_validation"
+# How the checkpoint is chosen (C13): the epoch with the lowest validation loss; early stopping uses the same quantity.
+SELECTION_RULE = "min_val_loss"
 
 
 def best_f2_threshold(y_true, y_score):
@@ -362,12 +419,13 @@ def split_sizes(splits):
 # Full pipeline
 # --------------------------------------------------------------------------------------
 def run_finetuning(args, model_name, model, model_config, head_params, train_transform, logger, extra_info=None):
-    """Fine-tune `model` on the base dataset, select on validation F2, evaluate on test and save everything.
+    """Train `model` on the base dataset, keep the lowest-validation-loss epoch, evaluate on test, save everything.
 
     Args:
-        model_name: 'gravit' | 'teglie' | 'deeplens' | 'efficientnet' (used by pipelines/load.py to rebuild the model).
-        model: the model, pretrained with frozen parameters already set (requires_grad=False), or freshly
-            initialised (EfficientNet-B0).
+        model_name: 'lensnet' | 'deeplens' | 'efficientnet' | 'teglie' | 'gravit' (used by pipelines/load.py to
+            rebuild the model).
+        model: the model, freshly initialised (from-scratch runs), or pretrained with frozen parameters already set
+            (requires_grad=False).
         model_config: kwargs that rebuild the architecture (stored in the checkpoint).
         head_params: parameters of the classification head (get head_learning_rate).
         train_transform: ModelInputTransform for training; evaluation uses it without augmentation.
@@ -377,9 +435,15 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
     use_amp = bool(args.mixed_precision and device.type == "cuda")
     eval_transform = train_transform.without_augmentation()
     data_info = {"train_data": resolve_train_data(args, logger), "split_seed": args.split_seed}
+    recipe = getattr(args, "recipe", "thesis")
+    logger.info(f"Training recipe '{recipe}'" + (" (pretrained side experiment)" if recipe == "finetune" else "") +
+                f": lr {args.learning_rate:g}, weight decay {args.weight_decay:g}, batch {args.batch_size}, "
+                f"max {args.epochs} epochs, warm-up {args.warmup_epochs}, augment {args.augment}, "
+                f"selection on {SELECTION_RULE}, patience {args.early_stop_patience}")
 
     with open(output_dir / "system_info.json", "w") as f:
-        json.dump({"model_name": model_name, "model_config": model_config, "input_preset": args.input_preset,
+        json.dump({"model_name": model_name, "model_config": model_config, "recipe": recipe,
+                   "selection": SELECTION_RULE, "input_preset": args.input_preset,
                    "transform": eval_transform.config(), **data_info, "arguments": vars(args), "python_version": sys.version, "pytorch_version": torch.__version__,
                    "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
                    **(extra_info or {})}, f, indent=2, default=str)
@@ -405,12 +469,7 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
         model = nn.DataParallel(model)
         logger.info(f"Using {torch.cuda.device_count()} GPUs")
 
-    train_labels = splits["train"][1]
-    counts = np.bincount(train_labels, minlength=2)
-    weights = torch.tensor([len(train_labels) / (2 * max(c, 1)) for c in counts], dtype=torch.float)
-    weights[1] *= args.lens_weight_multiplier
-    criterion = nn.CrossEntropyLoss(weight=weights.to(device), label_smoothing=args.label_smoothing)
-    logger.info(f"Class weights: {weights.numpy()}, label smoothing: {args.label_smoothing}")
+    criterion = build_criterion(splits["train"][1], args, device, logger)
     scaler = make_grad_scaler(use_amp)
 
     def checkpoint(epoch, metrics):
@@ -420,7 +479,7 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
 
     history = {k: [] for k in ("train_loss", "train_acc", "val_loss", "val_acc", "val_recall", "val_precision",
                                "val_specificity", "val_f1", "val_f2", "val_pr_auc", "val_roc_auc", "lr")}
-    best_f2, best_epoch, epochs_no_improve = -1.0, 0, 0
+    best_loss, epochs_no_improve = math.inf, 0
     for epoch in range(1, args.epochs + 1):
         start = time.time()
         train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device, scaler, use_amp,
@@ -442,10 +501,10 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
         torch.save(checkpoint(epoch, m), output_dir / "last_model.pth")
         if args.checkpoint_freq and epoch % args.checkpoint_freq == 0:
             torch.save(checkpoint(epoch, m), output_dir / f"checkpoint_epoch_{epoch}.pth")
-        if m["f2"] > best_f2 and m["specificity"] >= args.min_specificity:
-            best_f2, best_epoch, epochs_no_improve = m["f2"], epoch, 0
-            torch.save(checkpoint(epoch, m), output_dir / "best_model.pth")
-            logger.info(f"  -> new best model saved (F2 {m['f2']:.4f}, spec {m['specificity']:.4f})")
+        if math.isfinite(val_loss) and val_loss < best_loss:
+            best_loss, epochs_no_improve = val_loss, 0
+            torch.save(checkpoint(epoch, {**m, "loss": val_loss}), output_dir / "best_model.pth")
+            logger.info(f"  -> new best model saved (val loss {val_loss:.4f})")
         else:
             epochs_no_improve += 1
             if epochs_no_improve >= args.early_stop_patience and epoch >= args.min_epochs:
@@ -457,7 +516,7 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
 
     best_path = output_dir / "best_model.pth"
     if not best_path.exists():
-        logger.warning(f"No epoch reached specificity >= {args.min_specificity}; using the last epoch as best model")
+        logger.warning("No epoch had a finite validation loss; using the last epoch as best model")
         best_path = output_dir / "last_model.pth"
         torch.save(torch.load(best_path, map_location="cpu"), output_dir / "best_model.pth")
     ckpt = torch.load(best_path, map_location="cpu")
@@ -469,8 +528,9 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
     ckpt.update(threshold=threshold, threshold_rule=THRESHOLD_RULE)  # frozen for the real-data evaluation
     torch.save(ckpt, output_dir / "best_model.pth")
     _, y_test, s_test = predict(model, test_loader, criterion, device, use_amp)
-    results = {**data_info, "split_sizes": split_sizes(splits),
-               "best_epoch": int(ckpt["epoch"]), "threshold_selected_on": "validation", "threshold_rule": THRESHOLD_RULE,
+    results = {**data_info, "recipe": recipe, "split_sizes": split_sizes(splits),
+               "best_epoch": int(ckpt["epoch"]), "selection": SELECTION_RULE,
+               "threshold_selected_on": "validation", "threshold_rule": THRESHOLD_RULE,
                "validation": binary_metrics(y_val, s_val, threshold),
                "test": binary_metrics(y_test, s_test, threshold),
                "test_at_0.5": binary_metrics(y_test, s_test, 0.5)}
