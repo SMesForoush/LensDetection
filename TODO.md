@@ -203,7 +203,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Done when:** the `system_info.json` `transform` entries of all three architectures are identical.
 
 ### C10. LensNet in the shared runner, with augmentation
-- **Status:** done (PR_LINK). `pipelines/lensnet.py` trains LensNet from random
+- **Status:** done ([SMesForoush/LensDetection#14](https://github.com/SMesForoush/LensDetection/pull/14)). `pipelines/lensnet.py` trains LensNet from random
   initialisation through `run_finetuning` (no per-model recipe overrides; `--augment` turns on D4 flips/rotations) with
   the D4 input: bands 0,1,2,3, 300 px, `unit_asinh` 0.5–99.5 %, softening 0.1 (`--scaling none` = raw MJy/sr, as
   `train.py`). `load.py` already knew `"lensnet"`, so pipeline checkpoints reload unchanged. `train.py` stays as legacy
