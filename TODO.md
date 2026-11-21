@@ -47,6 +47,7 @@ val 973 (56), test 940 (48), with 45 dropped.
 | `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every real image, unsplit, for C8. Both return `(samples, quality_report)`: corrupted files are dropped first (C14). |
 | `datasets/quality.py` | Finds corrupted files (unreadable, wrong shape, > 50 % NaN/inf, all zero) before training, cached per data directory in `file_qc.json` (C14). |
 | `pipelines/evaluate_real.py` | C8: scores all real images with a checkpoint at its frozen validation threshold and writes `real_predictions.csv` + `real_results.json`. |
+| `scripts/error_analysis.py` | C17: picks the median-ROC-AUC seed per architecture, samples its real-data FP/FN, renders a blind gallery and writes an empty coding sheet plus the cross-model overlap table. |
 | `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
 
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. |
@@ -209,8 +210,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
   `train.py`). `load.py` already knew `"lensnet"`, so pipeline checkpoints reload unchanged. `train.py` stays as legacy
   (README and a log warning say so). Grad-CAM moved to `scripts/gradcam.py`, which reads a predictions CSV and any
   checkpoint; its LensNet default layer is now `pool5`, because `conv5` (before BN/ReLU) gave all-zero maps.
-  `slurm/finetune.sh` takes `MODEL=lensnet`. Also fixed `pipelines/evaluate_real.py`, which crashed since C14 changed
-  `all_real_samples` to return `(samples, report)`; `real_results.json` now has `dropped_corrupted`.
+  `slurm/finetune.sh` takes `MODEL=lensnet`.
   Smoke run (`--augment --max_samples_per_class 100 --epochs 2`, MPS): about 6 s per epoch after the first, all
   standard outputs written, `load_finetuned` reproduces the saved test scores (max diff 4e-8), and
   `evaluate_real` scores 5,031 real images (277 + 4,754).
@@ -307,7 +307,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Done when:** with two seeds of one smoke-test model, the aggregator prints mean ± sd and writes the `.tex` snippet.
 
 ### C17. Error-analysis tools
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#13](https://github.com/SMesForoush/LensDetection/pull/13))
 - **Depends on:** C8
 - **Files:** new `scripts/error_analysis.py`
 - **To do** (the procedure is in doc section 5.9):
