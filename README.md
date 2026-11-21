@@ -231,9 +231,17 @@ given on the command line always win. `system_info.json` and `test_results.json`
 
 `best_model.pth` (the epoch with the lowest validation loss), `last_model.pth`, `training_history.json`,
 `test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`,
-`data_quality_report.json` (dropped corrupted files), `finetune.log`. LensNet writes the same files.
+`data_quality_report.json` (dropped corrupted files), `finetune.log`, and the test-set curve points `roc_curve.csv`
+(`fpr`, `tpr`, `threshold`) and `pr_curve.csv` (`recall`, `precision`, `threshold`), for overlaying seeds. LensNet
+writes the same files.
 The decision threshold is tuned for F2 on the validation set and then applied to the test set. It is also stored in
 `best_model.pth` (keys `threshold` and `threshold_rule`), by `train.py` too.
+
+Every metrics block in `test_results.json` has `fpr` and `prevalence` (lens fraction) next to recall, specificity,
+precision, F1/F2, ROC-AUC and PR-AUC. The `test` block also has `ci95`: 95 % percentile intervals for recall,
+specificity, FPR, precision, F1, ROC-AUC and PR-AUC from 2,000 bootstrap resamples of the test images, stratified by
+class (the lens and non-lens counts stay fixed) at the fixed threshold. The top-level `bootstrap` key records these
+settings (`pipelines/common.py::bootstrap_ci`).
 
 Reload a trained model (any pipeline, including LensNet, or a legacy `train.py` checkpoint) together with its exact input transform:
 
@@ -262,7 +270,9 @@ It writes `real_predictions.csv` (same columns as `test_predictions.csv`), `real
 threshold plus ROC-AUC and PR-AUC for: `overall`; `per_source` (recall of `real_lens_confident` and
 `real_lens_calibration`, specificity and FPR of `lookalike` and `real_nonlens`); and `per_tier` (`confident` = confident
 lenses + all non-lenses, `calibration` = calibration lenses + all non-lenses). Next to every PR-AUC are `prevalence`
-(lens fraction) and `pr_auc_random`, the PR-AUC of a random classifier, which equals the prevalence.
+(lens fraction) and `pr_auc_random`, the PR-AUC of a random classifier, which equals the prevalence. `overall` and each
+`per_tier` block also have `ci95`, the same stratified bootstrap intervals as in `test_results.json`. The curve points
+over all real images go to `real_roc_curve.csv` and `real_pr_curve.csv`.
 
 ### Several seeds per model, and mean ± sd
 
