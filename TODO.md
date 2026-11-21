@@ -190,7 +190,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Done when:** running it on a smoke-test checkpoint writes both files, and the counts add up to 277 + 4,754.
 
 ### C9. One shared input transform and size
-- **Status:** in progress (`claude/c9-shared-transform`). `--input_preset {thesis,native}` (default `thesis`) in
+- **Status:** done ([SMesForoush/LensDetection#15](https://github.com/SMesForoush/LensDetection/pull/15)). `--input_preset {thesis,native}` (default `thesis`) in
   `train.py` and every pipeline. `thesis` = `ModelInputTransform.thesis_default()` (`THESIS_TRANSFORM` in
   `datasets/transforms.py`: bands 0,1,2,3, 300 px, `unit_asinh` 0.5–99.5 %, softening 0.1); with it, a `--bands`,
   `--image_size` or `--resize_mode` that differs is an error. `native` = each model's published input (LensNet raw,
