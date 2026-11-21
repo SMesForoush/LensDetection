@@ -2,8 +2,10 @@
 
 ## Data and training from scratch
 
-`train.py` trains LensNet from scratch, and `pipelines/` fine-tunes pretrained models. Both read the same
-data sources through `datasets/sources.py` and use the same split.
+`pipelines/lensnet.py` trains the LensNet baseline from scratch, and the other `pipelines/` scripts fine-tune
+pretrained models. All of them go through the same runner (`pipelines/common.py::run_finetuning`), read the same data
+sources through `datasets/sources.py` and use the same split. `train.py` is the older, separate LensNet loop (see
+[LensNet baseline](#lensnet-baseline)); it is kept as legacy and reads the same data.
 
 **Data mode.** `--train_data` sets which images train, validate and test the model:
 
@@ -61,11 +63,11 @@ lenses from 56 / 12 / 12 lens systems) at split seed 42. `--val_region` and `--t
 `--train_data prism`. `--mock_data_dir` is accepted as another name for `--prism_dir`.
 
 ```bash
-python train.py --output_dir results/lensnet_prism --gpu                      # PRISM only (default)
-python train.py --train_data real --output_dir results/lensnet_real --gpu
-python train.py --train_data both --output_dir results/lensnet_real_prism --gpu
-sbatch slurm/finetune.sh                       # fine-tuning on PRISM only
-TRAIN_DATA=real sbatch slurm/finetune.sh       # fine-tuning on real data (TRAIN_DATA=both: real + PRISM)
+python -m pipelines.lensnet --augment --output_dir results/lensnet_prism --gpu              # PRISM only (default)
+python -m pipelines.lensnet --augment --train_data real --output_dir results/lensnet_real --gpu
+python -m pipelines.lensnet --augment --train_data both --output_dir results/lensnet_real_prism --gpu
+sbatch slurm/finetune.sh                       # MODEL (default deeplens) on PRISM only
+TRAIN_DATA=real sbatch slurm/finetune.sh       # on real data (TRAIN_DATA=both: real + PRISM)
 ```
 
 **Running off Roihu.** `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
@@ -79,14 +81,43 @@ python3 scripts/pack_for_laptop.py --prism_dir /scratch/ituomine/COSMOS-WEB-LENS
     --weights_dir weights --out /scratch/$USER/cosmos_laptop_data.zip
 # on the laptop
 rsync -P roihu:/scratch/$USER/cosmos_laptop_data.zip . && unzip cosmos_laptop_data.zip -d cosmos_data
-python train.py --train_data real --cosmos_root cosmos_data --real_lens_dir mock-lens-modeling/real_cowls_lenses \
-    --output_dir results/local --gpu
-python train.py --prism_dir cosmos_data/prism --output_dir results/local_prism --gpu
+python -m pipelines.lensnet --train_data real --cosmos_root cosmos_data \
+    --real_lens_dir mock-lens-modeling/real_cowls_lenses --output_dir results/local --gpu
+python -m pipelines.lensnet --prism_dir cosmos_data/prism --output_dir results/local_prism --gpu
 ```
 
 `--gpu` uses an NVIDIA GPU (CUDA) when there is one, and otherwise the Apple Silicon GPU (MPS) on a Mac, in
-`train.py` and all three pipelines. Mixed precision stays CUDA-only. On an M-series Mac, CMU DeepLens epochs ran
+`train.py` and all the pipelines. Mixed precision stays CUDA-only. On an M-series Mac, CMU DeepLens epochs ran
 about 20x faster on the GPU than on the CPU.
+
+## LensNet baseline
+
+`python -m pipelines.lensnet` trains `models/lensnet.py::LensNet` (a five-block VGG-style CNN with global average
+pooling, 1,753,570 parameters) from random initialisation. It uses `run_finetuning`, so its loss, optimiser, schedule,
+early stopping, validation threshold, outputs and checkpoint are the same as the other pipelines', and
+`pipelines/load.py::load_finetuned` reloads it. The input follows decision D4: bands `0,1,2,3` (F115W, F150W, F277W,
+F444W), 300 × 300 px, each band scaled to [0, 1] between its 0.5 and 99.5 percentiles and asinh-stretched (softening
+0.1). `--scaling none` feeds the raw MJy/sr values as `train.py` did; `--augment` adds random flips and 90°
+rotations to the training images. `--dropout` (default 0.5) and the shared training arguments apply.
+
+```bash
+python -m pipelines.lensnet --augment --output_dir results/lensnet_prism --gpu
+MODEL=lensnet sbatch slurm/finetune.sh
+```
+
+`train.py` is the earlier LensNet script, kept as **legacy** so the pilot runs can be reproduced. It has its own loop
+(cosine warm restarts, raw MJy/sr input, no augmentation, its own early stopping and plots) and is not comparable with
+the pipelines. Its checkpoints still load with `pipelines/load.py`.
+
+**Grad-CAM.** `scripts/gradcam.py` draws Grad-CAM maps of the lens score for images from a predictions CSV
+(`test_predictions.csv`, `validation_predictions.csv` or `real_predictions.csv`), using any saved checkpoint and its
+own input transform. `--outcomes FP,FN` picks the error types, `--num_samples` how many, and `--layer` the module
+(default `pool5`, LensNet's last rectified feature map; other models need `--layer`). It writes
+`gradcam_<csv name>.png` and the rows shown as `gradcam_<csv name>.csv`.
+
+```bash
+python scripts/gradcam.py results/lensnet_prism --predictions real_predictions.csv --outcomes FP,FN --num_samples 24
+```
 
 ## Fine-tuning pretrained lens finders
 
@@ -111,9 +142,9 @@ and the original `.h5` weights are read with `h5py`, so training does not need T
 pip install --user -r requirements-finetune.txt   # if the pytorch module lacks timm/transformers/h5py/astropy
 bash scripts/download_weights.sh weights           # on a login node (add GraViT repo ids as extra args)
 
-sbatch slurm/finetune.sh gravit   --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors
-sbatch slurm/finetune.sh teglie   --freeze_stages 1
-sbatch slurm/finetune.sh deeplens
+MODEL=gravit   sbatch slurm/finetune.sh --repo_id parlange/vit-gravit-c3 --weights weights/gravit/vit-gravit-c3/model.safetensors
+MODEL=teglie   sbatch slurm/finetune.sh --freeze_stages 1
+MODEL=deeplens sbatch slurm/finetune.sh
 ```
 
 Or run directly, e.g. `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
@@ -132,13 +163,11 @@ arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--
 
 `best_model.pth` (selected on validation F2 with `--min_specificity`), `last_model.pth`, `training_history.json`,
 `test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`,
-`data_quality_report.json` (dropped corrupted files), `finetune.log`.
-The decision threshold is tuned for F2 on the validation set and then applied to the test set.
-`test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`, `finetune.log`.
+`data_quality_report.json` (dropped corrupted files), `finetune.log`. LensNet writes the same files.
 The decision threshold is tuned for F2 on the validation set and then applied to the test set. It is also stored in
 `best_model.pth` (keys `threshold` and `threshold_rule`), by `train.py` too.
 
-Reload a trained model (any pipeline, or LensNet from `train.py`) together with its exact input transform:
+Reload a trained model (any pipeline, including LensNet, or a legacy `train.py` checkpoint) together with its exact input transform:
 
 ```python
 from pipelines.load import load_finetuned, lens_probability

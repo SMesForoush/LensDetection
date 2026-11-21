@@ -18,7 +18,7 @@ module load python-pytorch/2.13
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 export HF_HUB_OFFLINE=1   # use the weights downloaded on the login node
 
-MODEL="deeplens"
+MODEL="${MODEL:-deeplens}"   # lensnet | deeplens | teglie | gravit, e.g. MODEL=lensnet sbatch slurm/finetune.sh
 SCRATCH_DIR="/scratch/ituomine/COSMOS-WEB-LENS/LensDetection"
 # TRAIN_DATA picks the data that trains, validates and tests the model (datasets/sources.py):
 #   prism (default)  PRISM simulations only; the real images are kept for the external evaluation
@@ -35,6 +35,8 @@ OUTPUT_DIR="$SCRATCH_DIR/finetune_${MODEL}_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$OUTPUT_DIR" logs
 
 case "$MODEL" in
+    lensnet)
+        MODEL_ARGS=(--augment) ;;   # from scratch, no weights
     gravit)
         MODEL_ARGS=(--repo_id parlange/vit-gravit-c3
                     --weights "$WEIGHTS_DIR/gravit/vit-gravit-c3/model.safetensors"

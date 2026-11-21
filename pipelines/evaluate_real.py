@@ -30,6 +30,7 @@ import torch.nn as nn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from datasets.quality import dropped_counts  # noqa: E402
 from datasets.sources import REAL_SOURCES, add_real_data_arguments, all_real_samples  # noqa: E402
 from pipelines.common import binary_metrics, make_loader, predict, save_predictions, select_device  # noqa: E402
 from pipelines.load import frozen_threshold, load_from_checkpoint, read_checkpoint  # noqa: E402
@@ -137,7 +138,7 @@ def main(argv=None):
         logger.warning(f"This model was trained with --train_data {train_data}: real images were in its training, "
                        f"validation and test splits, so this is NOT an external evaluation")
 
-    samples = all_real_samples(args, logger)
+    samples, quality_report = all_real_samples(args, logger)  # corrupted files dropped (datasets/quality.py)
     paths = [s.path for s in samples]
     labels = [s.label for s in samples]
     sources = [s.source for s in samples]
@@ -157,6 +158,7 @@ def main(argv=None):
         "transform": transform.config(), "real_manifest": str(args.real_manifest),
         "counts": {"n": len(samples), "lenses": int(sum(labels)), "nonlenses": len(labels) - int(sum(labels)),
                    "sources": {s: sources.count(s) for s in REAL_SOURCES}},
+        "dropped_corrupted": dropped_counts(quality_report),
         "loss": loss,
         **real_metrics(y_true, y_score, sources, threshold),
     }
