@@ -190,8 +190,9 @@ python -m pipelines.evaluate_real results/deeplens_prism --cosmos_root cosmos_da
     --real_lens_dir mock-lens-modeling/real_cowls_lenses --gpu      # on the laptop
 ```
 
-It writes `real_predictions.csv` (same columns as `test_predictions.csv`), `real_results.json` and
-`evaluate_real.log` next to the checkpoint (or to `--output_dir`). `real_results.json` has the metrics at the frozen
+It writes `real_predictions.csv` (same columns as `test_predictions.csv`), `real_results.json`,
+`real_data_quality_report.json` (dropped corrupted real files; a separate name, so the training run's
+`data_quality_report.json` is kept) and `evaluate_real.log` next to the checkpoint (or to `--output_dir`). `real_results.json` has the metrics at the frozen
 threshold plus ROC-AUC and PR-AUC for: `overall`; `per_source` (recall of `real_lens_confident` and
 `real_lens_calibration`, specificity and FPR of `lookalike` and `real_nonlens`); and `per_tier` (`confident` = confident
 lenses + all non-lenses, `calibration` = calibration lenses + all non-lenses). Next to every PR-AUC are `prevalence`
