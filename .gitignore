@@ -3,4 +3,18 @@ __pycache__/
 *.pyc
 .venv
 logs/
+
 file_qc.json
+
+zips/
+
+# Local data copies used for laptop runs (see README); too large for git
+cosmos_data/
+mock-lens-modeling/
+
+# Training outputs: checkpoints, predictions, plots, and the log train.py writes to the working directory
+results/
+ml_training_advanced.log
+
+# Thesis figures: the copy that counts lives in the thesis sources
+figures/

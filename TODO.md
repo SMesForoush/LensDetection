@@ -43,13 +43,16 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | File | Role |
 |---|---|
-| `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every usable real image, unsplit, for C8. Both return `(samples, quality_report)`: corrupted files are dropped first (C14). |
+
+| `datasets/sources.py` | Collects samples (`collect_from_args`) and splits them (`split_samples`). `--train_data prism` (default) \| `real` \| `both` picks the sources. PRISM is split 70/15/15, grouped by `base_lens_id`, under `--split_seed` (done in #7); real data by region. `all_real_samples(args)` returns every real image, unsplit, for C8. Both return `(samples, quality_report)`: corrupted files are dropped first (C14). |
 | `datasets/quality.py` | Finds corrupted files (unreadable, wrong shape, > 50 % NaN/inf, all zero) before training, cached per data directory in `file_qc.json` (C14). |
-| `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf (≤ 50 %), clips at ±10× the 99.9th percentile of \|x\|. Raises on a corrupted file. |
+| `pipelines/evaluate_real.py` | C8: scores all real images with a checkpoint at its frozen validation threshold and writes `real_predictions.csv` + `real_results.json`. |
+| `datasets/base.py` | `LensDatasetMemoryEfficient`: loads `.npy`, pads or crops to 4×300×300, inpaints NaN/inf, clips at ±10× the 99.9th percentile of \|x\|. |
+
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
 | `pipelines/deeplens.py`, `teglie.py`, `gravit.py` | One script per model, built on `run_finetuning`. |
-| `pipelines/load.py` | Rebuilds a saved model and its transform from `best_model.pth`. |
+| `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
 | `train.py` | LensNet (baseline). A separate, older training loop that does **not** use `run_finetuning`. |
 | `models/*.py` | Architectures: `lensnet.py` (1,753,570 params), `deeplens.py` (3,557,281 at 300 px), `teglie.py` (3,193,889), `gravit.py`. |
 | `slurm/finetune.sh` | Roihu job: 1× GH200, `module load python-pytorch/2.13`. |
@@ -154,9 +157,17 @@ C14, C15, C16, C17 can be done in parallel at any time.
   `train.py`, and save the threshold **inside `best_model.pth`** (key `threshold`) as well as in `test_results.json`,
   so that C8 can read it.
 - **Done when:** the follow-up is merged and a run's checkpoint contains `threshold` and `threshold_rule`.
+- **Partly done in C8:** checkpoints already store `threshold` and `threshold_rule` (`THRESHOLD_RULE` in
+  `pipelines/common.py`). What is left is the D3 rule itself: swap `best_f2_threshold` and `THRESHOLD_RULE` together.
 
 ### C8. Real-data evaluation script
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#11](https://github.com/SMesForoush/LensDetection/pull/11)). `pipelines/evaluate_real.py`. `run_finetuning` and
+  `train.py` now save the validation threshold in `best_model.pth` (`threshold`, `threshold_rule` =
+  `max_f2_on_validation`, a constant in `pipelines/common.py`), so C8 no longer waits for the C7 follow-up. Only the
+  rule itself still changes with D3. `train.py` checkpoints also carry `model_name`/`model_config`/`transform`, and
+  `load.py` rebuilds older LensNet checkpoints from their `args`, so C8 does not wait for C10 either. Older runs fall back
+  to the threshold in their `test_results.json` (only if chosen on validation, and only for the same epoch).
+  Smoke-tested on 2-epoch LensNet and DeepLens PRISM runs: 5,031 images scored (277 + 4,754).
 - **Depends on:** C6, C7 follow-up
 - **Files:** new `scripts/evaluate_real.py` (or `pipelines/evaluate_real.py`), which reuses `pipelines/load.py` and
   `binary_metrics`

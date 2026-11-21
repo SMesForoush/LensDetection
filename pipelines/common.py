@@ -288,6 +288,12 @@ def binary_metrics(y_true, y_score, threshold=0.5):
     }
 
 
+# How the decision threshold is chosen (on validation only). Stored in best_model.pth and test_results.json so that
+# pipelines/evaluate_real.py applies the same frozen threshold to the real images. Change it together with
+# best_f2_threshold once decision D3 (TODO.md) is settled.
+THRESHOLD_RULE = "max_f2_on_validation"
+
+
 def best_f2_threshold(y_true, y_score):
     best_t, best_f2 = 0.5, -1.0
     for t in np.linspace(0.05, 0.95, 91):
@@ -424,9 +430,11 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
 
     _, y_val, s_val = predict(model, val_loader, criterion, device, use_amp)
     threshold = best_f2_threshold(y_val, s_val)
+    ckpt.update(threshold=threshold, threshold_rule=THRESHOLD_RULE)  # frozen for the real-data evaluation
+    torch.save(ckpt, output_dir / "best_model.pth")
     _, y_test, s_test = predict(model, test_loader, criterion, device, use_amp)
     results = {**data_info, "split_sizes": split_sizes(splits),
-               "best_epoch": int(ckpt["epoch"]), "threshold_selected_on": "validation",
+               "best_epoch": int(ckpt["epoch"]), "threshold_selected_on": "validation", "threshold_rule": THRESHOLD_RULE,
                "validation": binary_metrics(y_val, s_val, threshold),
                "test": binary_metrics(y_test, s_test, threshold),
                "test_at_0.5": binary_metrics(y_test, s_test, 0.5)}

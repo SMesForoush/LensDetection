@@ -97,7 +97,8 @@ from datasets.base import LensDatasetMemoryEfficient
 from datasets.quality import dropped_counts, save_report
 from datasets.sources import add_data_arguments, collect_from_args, resolve_train_data, split_samples
 from models.lensnet import LensNet
-from pipelines.common import best_f2_threshold, select_device, split_sizes
+from pipelines.common import THRESHOLD_RULE, best_f2_threshold, select_device, split_sizes
+from pipelines.load import LENSNET_RAW_TRANSFORM
 # --------------------------------------------------------------------------------------
 # Reproducibility
 # --------------------------------------------------------------------------------------
@@ -813,6 +814,21 @@ def main():
     optimal_threshold = best_f2_threshold(val_targets, val_scores)
     logger.info(f"Decision threshold {optimal_threshold:.3f} chosen on the validation set (max F2), frozen for the test set")
 
+    # Store the frozen threshold, and what pipelines/load.py needs to rebuild LensNet, in best_model.pth, so that
+    # pipelines/evaluate_real.py can score the real images without the validation data.
+    unwrapped = model.module if isinstance(model, nn.DataParallel) else model
+    best_checkpoint = torch.load(best_model_path, weights_only=False) if best_model_path.exists() else \
+        {'epoch': epoch + 1, 'args': vars(args)}
+    best_checkpoint.update({
+        'model_name': 'lensnet',
+        'model_config': {'dropout': args.dropout, 'in_channels': 4},
+        'transform': LENSNET_RAW_TRANSFORM,
+        'model_state_dict': unwrapped.state_dict(),
+        'threshold': float(optimal_threshold),
+        'threshold_rule': THRESHOLD_RULE,
+    })
+    torch.save(best_checkpoint, best_model_path)
+
     test_metrics = validate_epoch(model, test_loader, criterion, device)
     test_targets = test_metrics['targets']
     test_scores = test_metrics['scores']
@@ -867,6 +883,7 @@ def main():
         'split_sizes': split_sizes(splits),
         'optimal_threshold': float(optimal_threshold),
         'threshold_selected_on': 'validation',
+        'threshold_rule': THRESHOLD_RULE,
         'recall': float(recall),
         'specificity': float(specificity),
         'precision': float(precision),

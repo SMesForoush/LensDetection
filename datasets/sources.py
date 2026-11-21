@@ -58,8 +58,8 @@ DEFAULT_TRAIN_DATA = "prism"
 Sample = namedtuple("Sample", "path label source region near_regions group stratum", defaults=("", ""))
 
 
-def add_data_arguments(parser):
-    """Data arguments shared by train.py and pipelines/."""
+def add_real_data_arguments(parser):
+    """Where the real images are: shared by add_data_arguments and pipelines/evaluate_real.py."""
     parser.add_argument("--cosmos_root", default=COSMOS_ROOT,
                         help="Root that the manifest's file paths are relative to (mock-lens-modeling on Roihu)")
     parser.add_argument("--real_manifest", default=str(REAL_MANIFEST),
@@ -67,6 +67,12 @@ def add_data_arguments(parser):
     parser.add_argument("--real_lens_dir", help="Folder of the COWLS lens cutouts (overrides --cosmos_root for lenses)")
     parser.add_argument("--lookalike_dir", help="Folder of the look-alike cutouts (overrides --cosmos_root)")
     parser.add_argument("--real_nonlens_dir", help="Folder of the hand-checked non-lens cutouts (overrides --cosmos_root)")
+    return parser
+
+
+def add_data_arguments(parser):
+    """Data arguments shared by train.py and pipelines/."""
+    add_real_data_arguments(parser)
     parser.add_argument("--train_data", choices=TRAIN_DATA_MODES,
                         help="Data that trains, validates and tests the model: 'prism' (PRISM simulations only; the "
                              "real images are left for external evaluation), 'real' (real images split by sky region) "

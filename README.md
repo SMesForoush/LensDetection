@@ -134,14 +134,39 @@ arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--
 `test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`,
 `data_quality_report.json` (dropped corrupted files), `finetune.log`.
 The decision threshold is tuned for F2 on the validation set and then applied to the test set.
+`test_results.json`, `test_predictions.csv`, `validation_predictions.csv`, `system_info.json`, `finetune.log`.
+The decision threshold is tuned for F2 on the validation set and then applied to the test set. It is also stored in
+`best_model.pth` (keys `threshold` and `threshold_rule`), by `train.py` too.
 
-Reload a fine-tuned model together with its exact input transform:
+Reload a trained model (any pipeline, or LensNet from `train.py`) together with its exact input transform:
 
 ```python
 from pipelines.load import load_finetuned, lens_probability
 model, transform = load_finetuned("best_model.pth")
 p_lens = lens_probability(model, transform, raw_images)   # raw_images: (N, 4, 300, 300)
 ```
+
+### Evaluation on the real images
+
+`pipelines/evaluate_real.py` scores every real COSMOS-Web image in the manifest (277 lenses + 4,754 non-lenses,
+unsplit) with a trained model, at the threshold that the training run chose on its own validation set. The model,
+transform and threshold are all read from the checkpoint. There is no threshold option, and no PRISM or validation
+data is read. Checkpoints from before the threshold was stored use the threshold in the `test_results.json` next to
+them, if that file says it was chosen on validation and its best epoch matches the checkpoint. A model trained with
+`--train_data real|both` has seen real images, so the script warns and sets `"external_evaluation": false`.
+
+```bash
+python -m pipelines.evaluate_real results/deeplens_prism --gpu     # a run directory, or a .pth file
+python -m pipelines.evaluate_real results/deeplens_prism --cosmos_root cosmos_data \
+    --real_lens_dir mock-lens-modeling/real_cowls_lenses --gpu      # on the laptop
+```
+
+It writes `real_predictions.csv` (same columns as `test_predictions.csv`), `real_results.json` and
+`evaluate_real.log` next to the checkpoint (or to `--output_dir`). `real_results.json` has the metrics at the frozen
+threshold plus ROC-AUC and PR-AUC for: `overall`; `per_source` (recall of `real_lens_confident` and
+`real_lens_calibration`, specificity and FPR of `lookalike` and `real_nonlens`); and `per_tier` (`confident` = confident
+lenses + all non-lenses, `calibration` = calibration lenses + all non-lenses). Next to every PR-AUC are `prevalence`
+(lens fraction) and `pr_auc_random`, the PR-AUC of a random classifier, which equals the prevalence.
 
 ### Notes on the pretrained models
 
