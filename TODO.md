@@ -53,9 +53,10 @@ val 973 (56), test 940 (48), with 45 dropped.
 
 | `datasets/transforms.py` | `ModelInputTransform`: band selection → resize → intensity scaling (`unit_asinh`, `unit_linear`, `teglie`, `zscale`, `none`) → optional ImageNet norm → optional D4 augmentation. `ModelInputTransform.thesis_default()` is the shared D4 input (`--input_preset thesis`, default; C9). |
 | `pipelines/common.py` | Shared runner `run_finetuning`, plus `binary_metrics`, `best_f2_threshold`, `save_predictions` and `build_arg_parser`. |
-| `pipelines/deeplens.py`, `teglie.py`, `gravit.py`, `efficientnet.py` | One script per model, built on `run_finetuning`. EfficientNet-B0 is trained from scratch (C12). |
+| `pipelines/lensnet.py`, `deeplens.py`, `teglie.py`, `gravit.py`, `efficientnet.py` | One script per model, built on `run_finetuning`. LensNet (C10) and EfficientNet-B0 (C12) train from scratch with the D4 input. |
 | `pipelines/load.py` | Rebuilds a saved model (pipelines or `train.py` LensNet) and its transform from `best_model.pth`; `frozen_threshold` reads its validation threshold. |
-| `train.py` | LensNet (baseline). A separate, older training loop that does **not** use `run_finetuning`. |
+| `train.py` | **Legacy** LensNet loop that does not use `run_finetuning` (kept to reproduce the pilot runs). Use `pipelines/lensnet.py`. |
+| `scripts/gradcam.py` | Grad-CAM of the lens score for rows of a predictions CSV, from any checkpoint (moved out of `train.py` in C10, for E21). |
 | `models/*.py` | Architectures: `lensnet.py` (1,753,570 params), `deeplens.py` (3,557,281 at 300 px), `teglie.py` (3,193,889), `efficientnet.py` (timm EfficientNet-B0, 4,010,398), `gravit.py`. |
 | `slurm/finetune.sh` | Roihu job: 1× GH200, `module load python-pytorch/2.13`. |
 | `../Master-thesis/sections/*.tex` | Thesis text (`data.tex`, `methodology.tex`, `literature.tex`, `introduction.tex`). |
@@ -86,20 +87,21 @@ C14, C15, C16, C17 can be done in parallel at any time.
 ## Decisions (confirm with supervisor before coding the parts they affect)
 
 ### D1. Train on PRISM only; use real data only for evaluation
-- **Status:** open
+- **Status:** Done
 - **Affects:** C6, C8, C13, E19, W22, W24
 - **Question:** Confirm that the final experiment trains and validates only on PRISM and evaluates once on all real
   cutouts. The thesis RQs (`introduction.tex`, RQ1–RQ4) already assume this; the code currently does the opposite.
 - **Default if no answer:** yes. Everything below assumes it.
+- **Decision:** Will do the final experiments only on PRISM. keep the rest of experiments as just side experiments. 
 
 ### D2. What the baseline is
-- **Status:** open
+- **Status:** Done
 - **Affects:** C10, W24
 - **Question:** `literature.tex` says the baseline is "modelled on the compact, published CNN of Schaefer et al. (2018)".
   LensNet (`models/lensnet.py`) is a generic five-block VGG-style CNN, not that network. Either keep LensNet and
   rewrite the sentence, or port the Schaefer et al. CNN.
-- **Default:** keep LensNet and rewrite the sentence. It is less work and fits the rule not to over-engineer the
-  baseline.
+- **Decision:** keep LensNet and rewrite the sentence.
+
 
 ### D3. Threshold objective
 - **Status:** open
@@ -200,8 +202,9 @@ C14, C15, C16, C17 can be done in parallel at any time.
   DeepLens and TEGLIE still load pretrained weights until C11 makes them optional.
 - **Depends on:** D4
 - **Files:** `datasets/transforms.py`, `pipelines/*.py`, `train.py`
-- **Now:** each pipeline builds its own `ModelInputTransform` with a different scaling, size and band order. `train.py`
-  uses no transform (raw MJy/sr; its pilot run collapsed and predicted every image as a lens).
+- **Now:** each pipeline builds its own `ModelInputTransform` with a different scaling, size and band order.
+  `pipelines/lensnet.py` (C10) already uses the D4 transform as its own default; the legacy `train.py` uses no transform
+  (raw MJy/sr; its pilot run collapsed and predicted every image as a lens).
 - **To do:** add a single default (for example `ModelInputTransform.thesis_default()`, or defaults in
   `build_arg_parser`) set to the D4 choice, and use it in every from-scratch run. Keep the model-specific settings
   (ZScale, 2,3,1,0 order) reachable only behind an explicit flag for the pretrained side experiment. Record the transform
@@ -209,7 +212,16 @@ C14, C15, C16, C17 can be done in parallel at any time.
 - **Done when:** the `system_info.json` `transform` entries of all three architectures are identical.
 
 ### C10. LensNet in the shared runner, with augmentation
-- **Status:** open
+- **Status:** done ([SMesForoush/LensDetection#14](https://github.com/SMesForoush/LensDetection/pull/14)). `pipelines/lensnet.py` trains LensNet from random
+  initialisation through `run_finetuning` (no per-model recipe overrides; `--augment` turns on D4 flips/rotations) with
+  the D4 input: bands 0,1,2,3, 300 px, `unit_asinh` 0.5–99.5 %, softening 0.1 (`--scaling none` = raw MJy/sr, as
+  `train.py`). `load.py` already knew `"lensnet"`, so pipeline checkpoints reload unchanged. `train.py` stays as legacy
+  (README and a log warning say so). Grad-CAM moved to `scripts/gradcam.py`, which reads a predictions CSV and any
+  checkpoint; its LensNet default layer is now `pool5`, because `conv5` (before BN/ReLU) gave all-zero maps.
+  `slurm/finetune.sh` takes `MODEL=lensnet`.
+  Smoke run (`--augment --max_samples_per_class 100 --epochs 2`, MPS): about 6 s per epoch after the first, all
+  standard outputs written, `load_finetuned` reproduces the saved test scores (max diff 4e-8), and
+  `evaluate_real` scores 5,031 real images (277 + 4,754).
 - **Depends on:** D2 (if the baseline changes, port that model instead)
 - **Files:** new `pipelines/lensnet.py`, `pipelines/load.py`, and possibly the retirement of `train.py`
 - **Now:** `train.py` is a separate loop with its own early stopping, metrics, cosine warm restarts and no augmentation.
@@ -237,9 +249,8 @@ C14, C15, C16, C17 can be done in parallel at any time.
   timm `efficientnet_b0`, `pretrained=False`, `in_chans=4`, 2 logits, 4,010,398 parameters; `--dropout` and
   `--drop_path_rate` default to the B0 paper's 0.2. Only `--input_preset thesis` (native is refused); no per-model
   `set_defaults`, so C13 sets its recipe in `build_arg_parser`. `system_info.json` records `"pretrained": null`.
-  `load.py` rebuilds `"efficientnet"`. `slurm/finetune.sh` now takes the model as its first argument (it was hard-coded
-  to `deeplens`, so `sbatch slurm/finetune.sh teglie` passed `teglie` to the DeepLens pipeline) and has an
-  `efficientnet` case. Smoke test (MPS, `--max_samples_per_class 100 --epochs 2 --augment`): about 12 s/epoch on 137
+  `load.py` rebuilds `"efficientnet"`. `slurm/finetune.sh` has an `efficientnet` case
+  (`MODEL=efficientnet sbatch slurm/finetune.sh --augment`). Smoke test (MPS, `--max_samples_per_class 100 --epochs 2 --augment`): about 12 s/epoch on 137
   training images after the first, train loss 1.70 → 0.92; `load_finetuned` reproduces the saved test probabilities
   to 2e-7.
 - **Files:** new `pipelines/efficientnet.py` (optionally `models/efficientnet.py`), `pipelines/load.py`,
