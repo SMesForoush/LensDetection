@@ -222,7 +222,7 @@ C14, C15, C16, C17 can be done in parallel at any time.
   `load_finetuned` reloads it.
 
 ### C11. CMU DeepLens from scratch
-- **Status:** done (PR to be linked). `--weights` is optional in `pipelines/deeplens.py` and `pipelines/teglie.py`.
+- **Status:** done ([SMesForoush/LensDetection#17](https://github.com/SMesForoush/LensDetection/pull/17)). `--weights` is optional in `pipelines/deeplens.py` and `pipelines/teglie.py`.
   Without it neither `load_keras_h5` nor `freeze_modules` runs, `--freeze_stages` > 0 is an error, the log says
   `training ... from random initialisation`, and `system_info.json` records `"pretrained": null`. The input is the
   `--input_preset` transform (default `thesis`, C9). `slurm/finetune.sh` takes `PRETRAINED` (default `0` = from
