@@ -1,9 +1,8 @@
 # LensDetection
 
-**Where it runs.** All training and evaluation runs on the laptop (Apple Silicon, `--gpu` uses MPS). There is no
-budget for CSC Roihu, so the Roihu material below (`slurm/`, `scripts/pack_for_laptop.py`) is kept only for reference
-and is not maintained; bringing it up to date is the optional task O26 in `TODO.md`. The data paths default to the
-laptop (`datasets/sources.py`), so runs need no path arguments:
+**Where it runs.** The final experiments run on CSC Roihu (1x GH200 per job, Slurm), see "Running on Roihu" below
+and R26 in `TODO.md`. The laptop (Apple Silicon, `--gpu` uses MPS) is for smoke tests and quick checks. The data paths
+default to the laptop (`datasets/sources.py`), so laptop runs need no path arguments:
 
 | Data | Default | Argument |
 |---|---|---|
@@ -13,8 +12,9 @@ laptop (`datasets/sources.py`), so runs need no path arguments:
 
 The defaults are anchored at the home directory, so a git worktree of the repo reads the same (git-ignored) data as the
 main checkout. The lens default applies only while `--cosmos_root` is the default: with a `--cosmos_root` of your own,
-the lenses are read from it too, unless `--real_lens_dir` is given. The Roihu paths are kept in `datasets/sources.py`
-as `ROIHU_PRISM_DIR` and `ROIHU_COSMOS_ROOT`; `slurm/finetune.sh` passes them explicitly.
+the lenses are read from it too, unless `--real_lens_dir` is given. On another machine, set the defaults in the
+environment instead: `LENSDET_PRISM_DIR`, `LENSDET_COSMOS_ROOT` and, if the lenses are not under that root,
+`LENSDET_REAL_LENS_DIR` (on Roihu, `slurm/roihu_env.sh` sets them). Arguments still win over the environment.
 
 ## Data and training from scratch
 
@@ -73,7 +73,7 @@ checked again. `LensDatasetMemoryEfficient` raises on a corrupted file instead o
 The files are read from `--cosmos_root` (the manifest's `file` paths are relative to it; default: the laptop's
 `cosmos_data`). `--real_lens_dir`, `--lookalike_dir` and `--real_nonlens_dir` read a source from another folder
 instead, by file name; the lenses default to the laptop's `mock-lens-modeling/real_cowls_lenses` (see the top). On
-Roihu (not used) the root was `/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling`, which holds all four sources.
+Roihu the root is `/scratch/ituomine/COSMOS-WEB-LENS/mock-lens-modeling`, which holds all four sources.
 
 The manifest is built by `scripts/build_real_manifest.py` from the mock-lens-modeling sample lists
 (`samples/lookalikes/cache/index.csv`, `samples/benchmark_v1/regions_v2/tile_fold_table.csv`,
@@ -87,7 +87,7 @@ images within 13" of the validation or test region are dropped, so no training c
 validation or test cutout.
 
 **PRISM simulations** (`--train_data prism|both`). `--prism_dir DIR` (default: the laptop's
-`~/aalto/thesis/prism/out/prism`; on Roihu, not used, `/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5`) holds `cosmos_lens_*.npy` (`prism_lens`, label 1)
+`~/aalto/thesis/prism/out/prism`; on Roihu `/scratch/ituomine/COSMOS-WEB-LENS/prism_jwst_cosmosweb_v5`) holds `cosmos_lens_*.npy` (`prism_lens`, label 1)
 and `cosmos_nonlens_*.npy` (`prism_nonlens`, label 0). They have no sky position and are split 70/15/15, grouped by
 `base_lens_id` from `DIR/cosmos_lens_training_catalog.csv`: the 25 variations of one simulated lens system always land
 in the same split. Non-lenses are split 70/15/15 within each `nonlens_mode`. The split depends only on `--split_seed`
@@ -101,7 +101,7 @@ python -m pipelines.lensnet --train_data real --output_dir results/lensnet_real 
 python -m pipelines.lensnet --train_data both --output_dir results/lensnet_real_prism --gpu
 ```
 
-**Copying data from Roihu (not used now).** The laptop already has the data. `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
+**Copying data from Roihu.** The laptop already has the data. `scripts/pack_for_laptop.py` zips the manifest's images on Roihu (Python 3 standard library
 only). By default it packs the non-lenses, about 6.9 GB uncompressed. `--with_lenses` also packs the lens cutouts,
 `--prism_dir` the PRISM files and `--weights_dir` the pretrained weights. The script checks that every file
 exists and that the zip will fit before it writes anything.
@@ -190,8 +190,8 @@ python -m pipelines.gravit --repo_id parlange/vit-gravit-c3 --weights weights/gr
     --output_dir results/gravit --gpu
 ```
 
-`slurm/finetune.sh` runs the same pipelines as a Roihu job (`MODEL=`, `TRAIN_DATA=`, `PRETRAINED=`,
-`INPUT_PRESET=`), but it is not maintained (O26). See `python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
+`slurm/finetune.sh` runs the same pipelines as Roihu jobs (see "Running on Roihu"). See
+`python -m pipelines.teglie --help`. Every pipeline accepts the `train.py` data
 arguments (`--train_data`, `--cosmos_root`, `--val_region`, `--test_region`, `--prism_dir`,
 `--max_samples_per_class`, ...), plus:
 
@@ -324,3 +324,40 @@ one) and `error_overlap.csv` (per image). `--skip_gallery` writes the tables wit
   at its 99.5th percentile instead; `--scaling_mode absolute --flux_scale <k>` reproduces the original.
 - CMU DeepLens' dense head depends on the input size. At any input size other than 101 (including the thesis
   preset's 300), only the convolutional weights are reused.
+
+## Running on Roihu
+
+The Roihu jobs run the same code path as the laptop: `slurm/finetune.sh` calls `scripts/run_seeds.sh` for one
+(model, seed), so the shared recipe, the run layout `<results>/<model>/seed_<s>/`, the resume rule and the real-data
+evaluation are the same. Only the device differs: CUDA with mixed precision, recorded in `system_info.json`
+(`device`, `mixed_precision_used`, `hostname`, `slurm_job_id`). Do not mix laptop and Roihu runs in one table.
+
+| File | Role |
+|---|---|
+| `slurm/roihu_env.sh` | Sourced by every job: `module load python-pytorch`, the project venv, the `LENSDET_*` data paths. |
+| `slurm/setup_roihu.sh` | Once, on a login node: makes the venv (adds `timm` etc. to the module), checks imports and data, and compares the data's checksums with the laptop's list in git (`datasets/data_checksums_laptop.csv`). |
+| `slurm/submit.sh` | Submits a models x seeds matrix as one job array (one GPU per run), sized automatically. |
+| `slurm/finetune.sh` | One array task: model `i / n_seeds`, seed `i % n_seeds`, then `pipelines.evaluate_real`. |
+| `scripts/data_checksums.py` | Checksum list of every data file (`--output`), and `--compare A B`. |
+| `scripts/sync_roihu.sh` | On the laptop: `rsync` results back into `results/roihu/` (without `last_model.pth`). |
+
+```bash
+# once, on a Roihu login node
+git clone git@github.com:SMesForoush/LensDetection.git /scratch/ituomine/COSMOS-WEB-LENS/LensDetection-git
+cd /scratch/ituomine/COSMOS-WEB-LENS/LensDetection-git && slurm/setup_roihu.sh
+# smoke job: every architecture, 2 epochs on 100 images per class (R26)
+MODELS="lensnet deeplens efficientnet" SEEDS=0 slurm/submit.sh results/roihu/smoke --time=0:30:00 \
+    -- --max_samples_per_class 100 --epochs 2
+# a final matrix (E27): 3 architectures x 5 seeds; resubmitting the same command resumes it
+MODELS="lensnet deeplens efficientnet" SEEDS="0 1 2 3 4" slurm/submit.sh results/roihu/e27
+TRAIN_DATA=both slurm/submit.sh results/roihu/e29_both       # other configurations: their own results directory
+squeue --me; tail -f logs/lensdet_<job>_<task>.out
+# on the laptop
+scripts/sync_roihu.sh results/roihu/e27 && .venv/bin/python scripts/aggregate_runs.py results/roihu/e27
+```
+
+`submit.sh` takes `sbatch` options before `--` (e.g. `--time`, `--partition`) and training arguments after it, and
+`MAX_PARALLEL=n` limits how many tasks run at once. `DRY_RUN=1` prints the `sbatch` command only. The defaults in
+`slurm/finetune.sh` (account `ituomine`, partition `gpumedium`, 1x GH200, 72 CPUs, 32 GB, 4 h) are the pilot's; set
+`--time` from the smoke job's epoch times.
+

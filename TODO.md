@@ -7,7 +7,8 @@ change, which files to touch, what it depends on and how to check it is done.
 **Working on an item:** set its `Status` to `in progress (<branch>)` when you start, and to `done (<PR link>)` when the
 PR is open. If you find the item's description no longer matches the code, fix the description here in the same PR.
 
-Last updated 2026-11-21 (Roihu dropped: every run is now on the laptop, see "Where runs happen").
+Last updated 2026-11-28 (supervisor meeting: the final experiments move to CSC Roihu, see "Where runs happen" and
+"Roihu phase").
 
 ---
 
@@ -32,14 +33,19 @@ keeps the old real-data split by sky region. Most items below exist to close the
 
 ### Where runs happen
 
-**Everything runs on the laptop** (Apple Silicon, `--gpu` = MPS): smoke tests, the final multi-seed runs and the
-real-data evaluation. There is no budget for CSC Roihu, so do not plan, size or prepare anything for it. New items do
-not need to touch `slurm/finetune.sh` or `scripts/pack_for_laptop.py`; they are left as they are, unmaintained. O26 is
-the optional task for reviving Roihu later.
+**Agreed with the supervisors at the progress review (about 2026-11-27):**
+1. Set everything up for CSC Roihu and run the experiments there.
+2. With the supercomputer available, run as many experiments as possible in about two weeks (until roughly
+   2026-12-11), then submit.
+3. Update the thesis with these results and add more figures.
+
+So the **final results come from Roihu** (1× GH200 per job, Slurm). The laptop (Apple Silicon, `--gpu` = MPS) is for
+smoke tests and quick checks only. The E18–E21 laptop runs stay as a pilot of the pipeline; do not mix laptop and Roihu
+runs in one results table (MPS float32 vs CUDA mixed precision). The Roihu work is the "Roihu phase" section below.
 
 The data paths default to the laptop (`datasets/sources.py`: `PRISM_DIR`, `COSMOS_ROOT`, `REAL_LENS_DIR`), anchored at
-`~/aalto/thesis`, so runs need no path arguments, also from a git worktree. The Roihu paths are kept as
-`ROIHU_PRISM_DIR` and `ROIHU_COSMOS_ROOT`.
+`~/aalto/thesis`, so laptop runs need no path arguments, also from a git worktree. On Roihu, pass the paths explicitly:
+`ROIHU_PRISM_DIR` and `ROIHU_COSMOS_ROOT` (`slurm/finetune.sh` already does).
 
 ### Data
 
@@ -70,13 +76,14 @@ val 973 (56), test 940 (48), with 45 dropped.
 | `train.py` | **Legacy** LensNet loop that does not use `run_finetuning` (kept to reproduce the pilot runs). Use `pipelines/lensnet.py`. |
 | `scripts/gradcam.py` | Grad-CAM of the lens score for rows of a predictions CSV, from any checkpoint (moved out of `train.py` in C10, for E21). |
 | `models/*.py` | Architectures: `lensnet.py` (1,753,570 params), `deeplens.py` (3,557,281 at 300 px), `teglie.py` (3,193,889), `efficientnet.py` (timm EfficientNet-B0, 4,010,398), `gravit.py`. |
-| `slurm/finetune.sh` | Roihu job (1× GH200). **Not used**: kept unmaintained, see O26. New items do not need to update it. |
+| `slurm/finetune.sh`, `slurm/submit.sh` | Roihu job-array task (1× GH200, calls `scripts/run_seeds.sh` for one (model, seed)) and its submitter (R26). `slurm/roihu_env.sh`, `slurm/setup_roihu.sh`: environment and one-time setup. |
+| `scripts/data_checksums.py`, `scripts/sync_roihu.sh` | Data checksum list and comparison (laptop list: `datasets/data_checksums_laptop.csv`); copy Roihu results back (R26). |
 | `../Master-thesis/sections/*.tex` | Thesis text (`data.tex`, `methodology.tex`, `literature.tex`, `introduction.tex`). |
 
 ### Conventions
 
-- Use the repo venv: `.venv/bin/python` (Apple MPS with `--gpu`, Python 3.14, PyTorch 2.15). All runs, final ones
-  included, happen here.
+- On the laptop, use the repo venv: `.venv/bin/python` (Apple MPS with `--gpu`, Python 3.14, PyTorch 2.15). On
+  Roihu, use the `python-pytorch` module through `slurm/finetune.sh` (R26).
 - For smoke tests, use the local PRISM copy with `--max_samples_per_class 100 --epochs 2`.
 - **Never use test labels for any choice** (threshold, checkpoint, hyperparameter), and never use real-data labels for
   anything except the final evaluation.
@@ -92,7 +99,12 @@ Decisions D1–D5 (supervisor) ──► C6 PRISM-only mode ──► C8 real-da
                                   C10 LensNet → shared runner + augmentation
                                   C11 DeepLens from scratch, C12 EfficientNet ─┤
                                   C13 shared recipe ───┘──► E18 smoke test ──► E19 final runs on the laptop (needs C16)
-C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional and blocks nothing.
+C14, C15, C16, C17 can be done in parallel at any time.
+
+Roihu phase:
+D3 threshold rule ─┐
+R26 Roihu setup ───┴──► E27 final PRISM-only matrix ──► E28, E30–E32 extra experiments ──► W33 figures ──► W34 thesis
+R29 config-aware real evaluation ──► E29 training-data configurations ─┘
 ```
 
 ---
@@ -141,6 +153,8 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 - **Default:** 5 seeds, and ask for more systems in parallel.
 - **Decision:** 3 seeds, and stay with the 12 systems for now, because of computation limits (all runs are on the
   laptop).
+- **Revisit (2026-11-28):** with Roihu available, the Roihu phase plans 5 seeds for the main matrices (E27, E29).
+  Confirm with the supervisors.
 
 ---
 
@@ -397,28 +411,64 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 ## Experiments
 
 ### E18. Smoke test every model
-- **Status:** open
+- **Status:** done (2026-11-21, laptop, MPS, seed 0, split seed 42; outputs in `results/e18/`).
+  - Smoke run (`scripts/run_seeds.sh --seeds 0 --results results/e18/smoke --real -- --max_samples_per_class 100
+    --epochs 2`, 136/30/34 PRISM images): LensNet, DeepLens and EfficientNet-B0 trained, wrote every output
+    (including `real_results.json` for all 5,031 real images) and reloaded with `load_finetuned`. On 8 test images,
+    the reloaded models' P(lens) matched `test_predictions.csv` to within 2e-7. With 3 batches per epoch, the losses
+    were too noisy to judge, so the full-data runs below were the loss check.
+  - Full PRISM, 2 epochs (`--results results/e18/timing -- --epochs 2`, 2,801/600/599 images):
+
+    | Model | Train loss, epoch 1 → 2 | Val loss, epoch 1 → 2 | Epoch 1 | Epoch 2 |
+    |---|---|---|---|---|
+    | LensNet | 0.468 → 0.432 | 0.496 → 2.53 | 36 s | 20 s |
+    | DeepLens | 0.620 → 0.244 | 0.829 → 0.543 | 341 s | 732 s |
+    | EfficientNet-B0 | 1.11 → 0.63 | 0.94 → 0.71 | 54 s | 31 s |
+
+  - LensNet's validation loss spiked in epoch 2, at the peak learning rate (1e-3, right after the warm-up; specificity
+    0.15). Selection on validation loss kept epoch 1, as intended. Check that the spike settles in the E19 histories.
+  - EfficientNet starts high (train loss 2.9 in the smoke run): timm initialises the 2-class head uniformly in
+    ±1/√2, which gives logits with std ≈ 3 at the start. It recovers within a few epochs: a 5-epoch run with 500 per
+    class (`results/e18/efficientnet_5ep`) went from 1.73 to 0.51 train loss and ended at 0.60 validation loss. No
+    change made.
+  - DeepLens' second epoch was about 2× slower than its first, in the smoke run (85 → 165 s) and on the full set
+    (341 → 732 s). That points to memory swapping or sustained-load throttling. Watch `sysctl vm.swapusage` during
+    E19. If swap keeps growing, `--batch_size 32` for DeepLens would be a labelled change to the shared recipe.
+  - Scoring the real set takes about 1 min per model.
+  - **E19 estimate** (3 seeds × at most 50 epochs, steady-state epoch time): LensNet ≈ 50 min, EfficientNet ≈ 1.3 h,
+    DeepLens ≈ 14–31 h (341–732 s per epoch), so about 16–33 h in total. That is an upper bound: early stopping
+    (patience 10) should end most runs earlier.
 - **Depends on:** C6, C9–C13
 - **To do:** run each architecture locally on MPS for 2 epochs on a small PRISM subset (`--max_samples_per_class 100`).
   Check that the loss goes down, the outputs are written and `load_finetuned` reloads the model. Note the time per
   epoch on the full PRISM set, to estimate how long E19 takes on the laptop.
 
 ### E19. Final runs on the laptop
-- **Status:** open
+- **Status:** done except DeepLens seed 2 (2026-11-22/23, `results/e19/`). 8 of 9 runs finished; DeepLens seed 2 stopped
+  after epoch 14 and was not resumed (`scripts/run_seeds.sh` resumes it). LensNet seeds 1 and 2 early-stopped after 16
+  and 11 epochs (best epochs 6 and 1): the validation loss spiked at the peak learning rate and did not settle within
+  the patience. Aggregate in `results/e19/aggregate/`.
 - **Depends on:** E18, C16, D5
 - **To do:** run 3 architectures × 3 seeds (D5) through `scripts/run_seeds.sh` on the laptop (`--gpu`, MPS), with the
   default data paths. Keep every `system_info.json` and the run directories intact under `results/`. Keep the laptop
   plugged in and awake for the whole run.
+- **Command (from E18):** `caffeinate -is scripts/run_seeds.sh --models "lensnet efficientnet deeplens" --results
+  results/e19 --real`, then `.venv/bin/python scripts/aggregate_runs.py results/e19`. The fast models go first.
+  Use a separate `--results` directory, because the aggregator searches every subfolder: pointed at `results/`, it
+  would also count the E18 runs and the older runs there.
 
 ### E20. Evaluate every run with frozen thresholds
-- **Status:** open
+- **Status:** done (`results/e19/*/seed_*/real_results.json`, `results/e19/aggregate/`). Real ROC-AUC is below 0.5 for
+  every run (0.420–0.488). Thresholds used the max-F2 rule (D3 was still open). The paired-difference bootstrap of
+  the thesis decision rule is not implemented yet. ROC figure: `scripts/plot_roc.py results/e19 <out>`.
 - **Depends on:** E19, C8
 - **To do:** evaluate each run on the synthetic test set (done by the training run) and on the real set (C8). Aggregate
   with C16. Report the threshold-free metrics (ROC-AUC, PR-AUC with the prevalence baseline) next to the thresholded
   ones.
 
 ### E21. Error analysis
-- **Status:** open
+- **Status:** in progress. `scripts/error_analysis.py results/e19 --output_dir results/e19_error_analysis` has run
+  (708 gallery images, empty coding sheet, overlap table). The manual coding is still open.
 - **Depends on:** E20, C17
 - **To do:** code the sampled FP and FN with the C17 sheet. Optionally have the supervisor code a random 20 % blind and
   report agreement. Present the results as descriptive counts plus 2–4 example cutouts per major category.
@@ -451,7 +501,8 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
   whether the offset is a sky pedestal.
 
 ### W24. Write `methodology.tex`
-- **Status:** open
+- **Status:** in progress (thesis branch `update/results-e19`): methodology TODOs filled from the final runs,
+  `results.tex` written.
 - **Depends on:** D1–D5 and the final code
 - **To do:** turn the Claude Doc "Chapter 5 — Methods" (https://claude.ai/artifact/DhvJQrpNLMjFPxvQKbd9mA, sections
   5.1–5.9) into LaTeX. Take the hyperparameters and software versions from the final runs' `system_info.json`, not from
@@ -465,24 +516,136 @@ C14, C15, C16, C17 can be done in parallel at any time. O26 (Roihu) is optional 
 
 ---
 
-## Optional (future)
+## Roihu phase (agreed with the supervisors, about 2026-11-27)
 
-### O26. Bring the Roihu scripts up to date
-- **Status:** optional, not planned. Do it only if a CSC Roihu budget becomes available and we decide to run there.
+Goal: as many well-defined experiments as the two-week window allows (until roughly **2026-12-11**), then update the
+thesis and submit. Every final number comes from Roihu. Items are in priority order: if time runs out, drop from the
+bottom. Each experiment uses `scripts/run_seeds.sh` (or its Slurm array mode, R26) with its own `--results`
+directory, so the aggregator never mixes experiments.
+
+Time per run on a GH200 is not measured yet; the R26 smoke job measures it. On the laptop, DeepLens took 341–732 s
+per epoch, LensNet about 20 s and EfficientNet-B0 about 31 s.
+
+### R26. Set up Roihu (was O26)
+- **Status:** in progress (branch `claude/e18-smoke-results`, not committed). Scripts done and tested on the laptop
+  (steps 5–8); steps 1–4 and the smoke job need a Roihu login. **Blocks everything below.**
+  - Done: `slurm/finetune.sh` rewritten as an array task that calls `scripts/run_seeds.sh` for one (model, seed)
+    (shared recipe, `<RESULTS>/<model>/seed_<s>/`, resume, `--real` evaluation); `slurm/submit.sh` sizes `--array`
+    for a models × seeds matrix; `slurm/roihu_env.sh` (module, venv, data paths); `slurm/setup_roihu.sh` (venv with
+    `requirements-finetune.txt`, import and data checks, checksum comparison); `scripts/data_checksums.py` and the
+    laptop list `datasets/data_checksums_laptop.csv` (9,034 files: 4,000 PRISM `.npy` + 2 catalogs, 5,031 real, the
+    manifest); `scripts/sync_roihu.sh`; `datasets/sources.py` reads `LENSDET_PRISM_DIR`, `LENSDET_COSMOS_ROOT`,
+    `LENSDET_REAL_LENS_DIR`; `system_info.json` records `device`, `mixed_precision_used`, `hostname`, `slurm_job_id`.
+  - Tested on the laptop with a stand-in `module` command: a 1-epoch LensNet task through `slurm/finetune.sh` wrote
+    every output plus `real_results.json`, read the data through the `LENSDET_*` variables, and a second call skipped
+    it; the array mapping and the out-of-range check work; `submit.sh` dry run prints the right `sbatch` call.
+  - Not checked (needs Roihu): module name and version, partition name, memory, time limit, the Roihu data.
 - **Where it stands:** `slurm/finetune.sh` has a case for all five models (`MODEL=`, `PRETRAINED=`, `TRAIN_DATA=`,
-  `INPUT_PRESET=`) as of C12 and passes `--prism_dir`/`--cosmos_root` explicitly, which it must, because the defaults
-  now point to the laptop. Nothing has run on Roihu since the pilot. The multi-seed driver (C16) is a laptop loop with
-  no Slurm array. `submit_training.sh` (untracked) is an older Mahti job for `train.py`, and `train.py`'s
-  `setup_mahti_environment` still describes Mahti.
-- **Files:** `slurm/finetune.sh`, `scripts/run_seeds.sh`, `README.md`, possibly `train.py`, `submit_training.sh`
+  `INPUT_PRESET=`) and passes `--prism_dir`/`--cosmos_root` explicitly, which it must, because the defaults point to the
+  laptop. Nothing has run on Roihu since the pilot. It predates C13 and still overrides the shared recipe:
+  `--lens_weight_multiplier 1.2` (recipe: 1.0), a fixed `--seed 42`, `--max_samples_per_class 30000`, a 1-hour time
+  limit and no real-data evaluation. `submit_training.sh` (untracked) is an older Mahti job for `train.py`; delete it.
+  SSH from this laptop to Roihu has never been set up (no host entry, no known host).
+- **Files:** `slurm/finetune.sh`, new `slurm/array.sh` (or a `--slurm` mode in `scripts/run_seeds.sh`), `README.md`
 - **To do:**
-  1. Check that `module load python-pytorch/<version>` still exists on Roihu and has `timm`, and that every change
-     made after C12 is reflected in `slurm/finetune.sh`.
-  2. Give `scripts/run_seeds.sh` a Slurm job-array mode (`--array=0-<models × seeds - 1>`, index → (model, seed)),
-     next to the laptop loop.
-  3. Check that the Roihu data paths (`ROIHU_PRISM_DIR`, `ROIHU_COSMOS_ROOT` in `datasets/sources.py`) still exist and
-     hold the same files as the laptop copies (same PRISM files, same manifest), so laptop and Roihu runs are
-     comparable.
-  4. Mixed precision is CUDA-only, so Roihu (GH200) runs would differ from laptop (MPS, float32) runs. Do not mix the
-     two in one results table; rerun every seed on one machine.
-- **Done when:** a 2-epoch smoke job of each architecture runs on Roihu and writes the standard outputs.
+  1. Access: SSH key registered in MyCSC, a `Host roihu` entry in `~/.ssh/config`, project `ituomine` has GPU
+     billing units for the window. Ask how many GPU hours the project has.
+  2. Check that `module load python-pytorch/<version>` exists on Roihu and has `timm`; else a venv on top of it.
+  3. Code on Roihu: a git clone of this repo under `/scratch/ituomine/COSMOS-WEB-LENS/LensDetection`, updated with
+     `git pull` (no hand-copied files).
+  4. Data: check that `ROIHU_PRISM_DIR` and `ROIHU_COSMOS_ROOT` hold the same files as the laptop copies (file count and
+     a checksum list of PRISM `npy/`, same manifest, same `file_qc.json` result). Copy the COWLS real lenses
+     (`--real_lens_dir`) if they are not there.
+  5. Make `slurm/finetune.sh` follow the shared recipe: drop the overrides above, take `SEED`, `RESULTS` and extra
+     arguments from the environment, write to `<results>/<model>/seed_<s>/` like `run_seeds.sh`, and run
+     `pipelines.evaluate_real` after training. Time limit from the smoke job, with margin.
+  6. Job array: index → (model, seed, configuration), skipping runs whose `test_results.json` exists (resumable, like
+     `run_seeds.sh`). One GPU per task.
+  7. Mixed precision is on by default on CUDA. Keep it (it is recorded in `system_info.json`) and say so in the thesis;
+     every final run uses the same setting.
+  8. Copy results back with `rsync` into `results/roihu/...`; keep the run directories intact.
+- **Done when:** a 2-epoch smoke array job of all three architectures runs on Roihu, writes the standard outputs plus
+  `real_results.json`, and `scripts/aggregate_runs.py` reads the copied-back directories. The epoch times are noted
+  here.
+
+### E27. Final PRISM-only matrix on Roihu
+- **Status:** open
+- **Depends on:** R26, D3 (and the C7 follow-up that implements it)
+- **To do:** LensNet, DeepLens, EfficientNet-B0 × **5 seeds** (D5's original default; the 3-seed limit was a laptop
+  constraint), `--train_data prism`, split seed 42, `--real`. Then aggregate, E20 evaluation and E21 error analysis on
+  these runs (the laptop E19 runs become the pilot).
+- **Done when:** 15 runs with `test_results.json` and `real_results.json`, aggregated.
+
+### E28. Recipe sensitivity (labelled variants of the shared recipe)
+- **Status:** open
+- **Depends on:** E27
+- **To do:** LensNet's validation loss spiked at the peak LR (1e-3) and two seeds stopped early; DeepLens slowed down on
+  the laptop. Run labelled variants, 3 seeds each: LensNet at peak LR 3e-4; all three architectures with
+  `--class_weighting balanced` (no effect on PRISM-only 1:1 data, so mainly a check for E29). Report them as
+  sensitivity checks next to the main table, not as the main result.
+
+### E29. Training-data configurations (PRISM only / real only / real + PRISM)
+- **Status:** open
+- **Depends on:** R26, R29
+- **To do:** 3 configurations × 3 architectures × 5 seeds (the "27 runs" slide, now with 5 seeds). All scored on the
+  same held-out real test images: sky region 0 (940 images, 48 lenses), which no configuration trains or validates on.
+  Decide class weighting for the real-data configurations (5.5 % lenses) and, for real + PRISM, whether validation uses
+  PRISM + real or real only.
+
+### R29. Configuration-aware real evaluation and aggregation
+- **Status:** open
+- **Depends on:** C8, C16
+- **To do** (from the hidden "What is left to complete" slide):
+  1. `pipelines/evaluate_real.py`: score a run on the real test region only (`--real_subset test_region`), so a
+     real-trained model is never scored on its own training images.
+  2. `scripts/aggregate_runs.py`: a configuration column (`train_data`) and the set `real_test_region`.
+  3. Re-score the E27 PRISM-only runs on region 0 from their saved `real_predictions.csv` (no retraining).
+  4. 2-epoch smoke tests of each model with `--train_data real` and `--train_data both`.
+
+### E30. Domain gap: matched noise and background
+- **Status:** open
+- **Depends on:** W23 (full-set statistics), E27
+- **To do:** the PRISM-only models score real images at chance (ROC-AUC 0.42–0.49), and PRISM noise and backgrounds
+  are 2–4× the real values. Test it: one PRISM-only variant whose inputs are brought to the real statistics (subtract
+  the per-band sky median, and/or rescale noise to the real level), 3 architectures × 3 seeds. If real ROC-AUC moves
+  clearly above 0.5, the domain gap is a supported explanation, not just a hypothesis.
+
+### E31. More architectures and pretrained side experiments
+- **Status:** open. Only if time remains, and only after the supervisors agree (the deck proposed fine-tuning as future
+  work).
+- **To do:** TEGLIE from scratch (4th architecture, 5 seeds). Side experiment, labelled as such: fine-tune the
+  published DeepLens and TEGLIE weights (`PRETRAINED=1 INPUT_PRESET=native`) and GraViT on PRISM.
+
+### E32. How much synthetic data is needed
+- **Status:** open. Only if time remains.
+- **To do:** learning curve: train on 25 %, 50 % and 100 % of the PRISM training base systems (grouped by
+  `base_lens_id`, test set unchanged), 3 architectures × 3 seeds. Optional for E29: real + PRISM with a growing number of
+  PRISM systems.
+
+### W33. More figures for the thesis
+- **Status:** open
+- **To do** (scripts under `scripts/`, outputs as PDF into `../Master-thesis/figures/`):
+  - example cutouts: PRISM lens / non-lens types, real lens / look-alike / hand-checked non-lens (Lupton RGB)
+  - training and validation curves per architecture (mean ± sd over seeds, from `training_history.json`)
+  - ROC and PR curves, synthetic vs real (`scripts/plot_roc.py`, add it to git)
+  - P(lens) distributions per class on synthetic and real data
+  - per-configuration comparison (E29) and per-variant comparison (E28, E30, E32)
+  - domain statistics: per-band noise and background histograms, PRISM vs real (W23)
+  - error-analysis examples: 2–4 cutouts per category (E21), Grad-CAM for a few of them (`scripts/gradcam.py`)
+
+### W34. Update the thesis with the Roihu results
+- **Status:** open
+- **Depends on:** E27 and whichever of E28–E32 finished
+- **To do:** replace the laptop E19 numbers in `methodology.tex` and `results.tex` with the Roihu runs (hyperparameters
+  and versions from their `system_info.json`), add the new experiments and figures, describe the laptop runs at most
+  as a pipeline pilot, then the discussion and conclusion.
+
+### Timeline (proposal)
+
+| Dates | Work |
+|---|---|
+| 28 Nov – 1 Dec | R26 access, module, data check, script; D3; smoke array job |
+| 1 – 3 Dec | Submit E27; build R29; start E28 |
+| 3 – 8 Dec | E29, E30 (after W23), then E31/E32 if there is time |
+| 8 – 11 Dec | Aggregate, error analysis on the Roihu runs, W33 figures |
+| from 11 Dec | W34 writing, then submission |

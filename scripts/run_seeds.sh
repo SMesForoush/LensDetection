@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Multi-seed driver (TODO C16): train every model with every seed, one run after another on the laptop.
+# Multi-seed driver (TODO C16): train every model with every seed, one run after another (on the laptop; on Roihu each
+# Slurm array task of slurm/finetune.sh calls this for one (model, seed), see slurm/submit.sh).
 #
 #   scripts/run_seeds.sh                                    # the E19 runs: lensnet deeplens efficientnet x seeds 0 1 2
 #   scripts/run_seeds.sh --real                             # ... and score each run on the real set (C8) afterwards
@@ -9,7 +10,7 @@
 # Each (model, seed) trains with `python -m pipelines.<model>` into <results>/<model>/seed_<s>/. Only --seed changes
 # between runs: --split_seed is the same for all of them (default 42), so every seed sees the same train/val/test split.
 # Everything after `--` is passed to every training run unchanged (it must not set --seed, --split_seed or
-# --output_dir). The data paths default to the laptop (datasets/sources.py), so no path arguments are needed.
+# --output_dir). The data paths default to the laptop, or to LENSDET_* from the environment (datasets/sources.py).
 #
 # Resumable: a (model, seed) whose test_results.json exists is skipped, so the loop can be stopped (Ctrl-C) and started
 # again with the same command. A run that was interrupted has no test_results.json yet and is trained again from the
@@ -22,7 +23,7 @@
 #   --split_seed N       data split seed shared by every run (default: 42)
 #   --results DIR        output root (default: results)
 #   --real               after training, score each run on every real image (pipelines.evaluate_real)
-#   --cpu                do not pass --gpu (default: --gpu, i.e. Apple MPS on the laptop)
+#   --cpu                do not pass --gpu (default: --gpu: Apple MPS on the laptop, CUDA on Roihu)
 #   --dry_run            print the commands without running them
 # Environment:
 #   PYTHON               interpreter (default: the repo's .venv/bin/python, from a git worktree the main checkout's,
