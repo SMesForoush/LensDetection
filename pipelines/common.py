@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import os
+import platform
 import random
 import sys
 import time
@@ -523,6 +524,8 @@ def run_finetuning(args, model_name, model, model_config, head_params, train_tra
                    "selection": SELECTION_RULE, "input_preset": args.input_preset,
                    "transform": eval_transform.config(), **data_info, "arguments": vars(args), "python_version": sys.version, "pytorch_version": torch.__version__,
                    "cuda_version": torch.version.cuda if torch.cuda.is_available() else None,
+                   "device": device.type, "mixed_precision_used": use_amp, "hostname": platform.node(),
+                   "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
                    **(extra_info or {})}, f, indent=2, default=str)
 
     logger.info(f"Collecting files (--train_data {args.train_data})...")

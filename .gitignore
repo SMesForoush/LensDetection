@@ -18,3 +18,6 @@ ml_training_advanced.log
 
 # Thesis figures: the copy that counts lives in the thesis sources
 figures/
+
+# Data checksum lists made on Roihu (the laptop list is kept: datasets/data_checksums_laptop.csv)
+data_checksums_roihu.csv
